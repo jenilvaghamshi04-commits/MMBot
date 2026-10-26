@@ -18,7 +18,7 @@ Open http://localhost:3000. Render: build command `npm install`; start command `
 
 ## Settings and algorithm
 
-- Reference: manual USDT price or a verified LF-base/USDT-quote DEX pool. No pool is preselected. The DEX feed uses DEX Screener `priceNative`; symbols are checked but users must verify the token contracts. API: https://docs.dexscreener.com/api/reference
+- Reference: manual USDT price or a verified LF-base DEX pool. The supplied Ethereum Uniswap LF/WETH pool `0xb37361ebebfe7e0f0d98300f0a8ae777daa1cc12` is preconfigured and selected by default. Previously unconfigured workspaces migrate to this feed; existing custom pool settings are retained. For LF/WETH, the app uses DEX Screener `priceUsd` and clearly labels the USD reference and the assumption 1 USDT = $1. Direct LF/USDT pools use `priceNative`. The supplied pool also validates the LF base contract `0x957c7fa189a408e78543113412f6ae1a9b4022c4`. API: https://docs.dexscreener.com/api/reference
 - Fill range: reference −2% to reference +2%, intersected with the depth ranges below.
 - Sell depth: total USDT of sells above the highest buy and at or below highest buy × 1.02.
 - Buy depth: total USDT of buys below the lowest sell and at or above lowest sell × 0.98.
@@ -41,3 +41,7 @@ At reference **0.0000200**, the 2% range is **0.0000196–0.0000204**. Prices 0.
 `npm test` covers opposite-side depth anchors, 2% bounds, gap, size constraints, duplicate prevention, $5 skip, completed targets, sub-minimum remainders, non-crossing behavior, and HTTP routes. `node --check public/app.js` checks browser script syntax.
 
 For live trading, the next step requires an identified exchange, authenticated server-side execution, secure environment-managed API keys, current public/private order-book reconciliation, balance/precision/minimum checks, stale-price handling, and a durable single-worker lifecycle. The browser paper toggle does not place real exchange orders.
+
+## DEX pool and palette update
+
+Configured pool: https://dexscreener.com/ethereum/0xb37361ebebfe7e0f0d98300f0a8ae777daa1cc12. Click the cyan DEX badge to inspect it. The terminal palette follows the supplied BOOK_BOTS screenshot: black background, charcoal panel headers, bright green bids, red asks and cyan DEX highlights. No bot is started by this update. Tests include LF/WETH USD conversion, direct USDT quoting, missing prices, and pinned-token verification.
