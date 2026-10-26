@@ -162,3 +162,9 @@ Official references:
 - https://www.gate.com/docs/developers/apiv4/en/
 - https://www.gate.com/docs/developers/apiv4/en/spot/
 - https://www.gate.com/trade/LF_USDT
+
+## Compact live page and balances
+
+The live page is now a focused single-column view based on the supplied manual-order panel: compact live controls, Real Manual Limit Order, **LF/USDT balance cards directly below the form**, then Bot Log. Market Trades is removed from the page and the Gate public market request no longer fetches trades. Public book snapshots are still read by the live strategy on the server; they are not displayed in this compact view.
+
+Balance cards show available funds, locked amounts and their sum for both LF and USDT. They are read from the connected Gate spot account on the existing refresh cycle. Disconnected or failed account reads show placeholders, not fabricated balances. My Open Exchange Orders and Algorithm Preview remain accessible in dialogs, preserving account visibility and pre-start review without expanding the main page. Demo page layout/behavior is unchanged by this compact-live update.

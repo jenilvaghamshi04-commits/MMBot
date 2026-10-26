@@ -10,7 +10,7 @@ export class GateClient{
   const response=await this.fetcher(`https://api.gateio.ws${full}${query?'?'+query:''}`,{method,headers,...(body?{body}:{}),signal:AbortSignal.timeout(12000)});
   const data=await response.json();if(!response.ok)throw Error(`Gate ${response.status}: ${data.label||'request rejected'}`);return data;
  }
- async market(){const [book,tickers,trades,pair]=await Promise.all([this.request('GET','/spot/order_book',{currency_pair:PAIR,limit:'100',with_id:'true'}),this.request('GET','/spot/tickers',{currency_pair:PAIR}),this.request('GET','/spot/trades',{currency_pair:PAIR,limit:'30'}),this.request('GET',`/spot/currency_pairs/${PAIR}`)]);return {book,ticker:tickers[0],trades,pair,fetchedAt:Date.now()};}
+ async market(){const [book,tickers,pair]=await Promise.all([this.request('GET','/spot/order_book',{currency_pair:PAIR,limit:'100',with_id:'true'}),this.request('GET','/spot/tickers',{currency_pair:PAIR}),this.request('GET',`/spot/currency_pairs/${PAIR}`)]);return {book,ticker:tickers[0],pair,fetchedAt:Date.now()};}
  async orders(){let result=[];for(let page=1;page<=10;page++){const rows=await this.request('GET','/spot/orders',{currency_pair:PAIR,status:'open',limit:'100',page:String(page)},null,true);result.push(...rows);if(rows.length<100)return result;}throw Error('Too many open orders to reconcile completely.');}
  accounts(){return this.request('GET','/spot/accounts',{},null,true);}
  create(order){return this.request('POST','/spot/orders',{},order,true);}
