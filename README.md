@@ -1,39 +1,43 @@
-# LF Market Maker Terminal
+# LF BOOK_BOTS terminal
 
-First-phase LF/USDT market-making workspace. Includes a responsive exchange-style simulated order book, paper limit orders with individual/bulk cancellation, saved bot configuration, and an optional real DEX reference feed.
+LF/USDT paper market-making workspace with a dark four-column layout: actual local depth profile, open orders/log, aggregated order book, and manual buy/sell ticket. Settings are in the top bar.
 
-## Run
+## Run / Render
 
-Requires Node.js 22 or newer. No dependencies or API keys required.
+Node.js 22+; no dependencies or API keys required.
 
 ```sh
 npm start
 ```
 
-Open http://localhost:3000. To deploy on Render, create a Node web service from this repository, use `npm install` as the build command and `npm start` as the start command. The server uses Render's PORT environment variable. `/api/health` is available for health checks.
+Open http://localhost:3000. Render: build command `npm install`; start command `npm start`; health check `/api/health`. PORT is read from the environment. Pushes to main deploy only if your Render service is connected to this repository with auto-deploy enabled. A render.yaml blueprint is included for a new service; existing services retain their dashboard configuration.
 
-## Configure
+## Execution scope
 
-Select the intended exchange and save the demo reference price, size, spread, levels, and interval. Enter a blockchain ID (such as `ethereum` or `bsc`) and the **pool address**, not the token contract. Save, then refresh the DEX feed. The pool must have LF as base token and USDT as quote token; the app uses `priceNative` as the direct USDT quote rather than substituting a USD price. Confirm the actual token contracts yourself: symbols alone cannot establish token identity. No LF pool has been preselected.
+**All orders are paper records in this browser. No exchange API/account is connected.** Runs only while this tab is open. No balances, real fills, or volume bot are simulated. Never enter API secrets in the source. Refresh always starts OFF. Same-origin tabs are not a shared execution engine; use one tab for paper operation. State is saved under `lf.mm.v2` in localStorage; the previous demo workspace is intentionally not imported. A fresh workspace has no orders and no fabricated book levels. Existing v2 orders persist across reloads.
 
-DEX data comes from the documented DEX Screener pairs endpoint: https://docs.dexscreener.com/api/reference. Data is provider-indexed, not a direct on-chain execution quote. Polling has a minimum interval of 10 seconds and only runs while the page is open. Errors clear the displayed price. The displayed timestamp is fetch time, not blockchain update time.
+## Settings and algorithm
 
-## Current scope
+- Reference: manual USDT price or a verified LF-base/USDT-quote DEX pool. No pool is preselected. The DEX feed uses DEX Screener `priceNative`; symbols are checked but users must verify the token contracts. API: https://docs.dexscreener.com/api/reference
+- Fill range: reference −2% to reference +2%, intersected with the depth ranges below.
+- Sell depth: total USDT of sells above the highest buy and at or below highest buy × 1.02.
+- Buy depth: total USDT of buys below the lowest sell and at or above lowest sell × 0.98.
+- Manual and bot orders both count toward each depth target. An absent opposite side uses the configured/planned opposite starting price to seed generation; measured depth shows zero until an actual opposite order exists.
+- Tick size defines the price ladder. Buy start walks down; sell start walks up. Zero starts select automatic values around the reference.
+- Gap is the number of **empty tick levels** between the nearest buy and sell. One empty level requires best sell − best buy ≥ 2 × tick. A sell at 0.0000220 with a buy at 0.0000219 has zero empty levels when tick = 0.0000001; for one empty level use buy ≤ 0.0000218.
+- Each generated order uses a random value between minimum and maximum USDT; a final order can be reduced to the remaining target only if it remains at least the minimum. A remainder below minimum stays unfilled.
+- A price is skipped if existing total value there is at least the configured threshold (default $5), if a bot order already exists there, or if it would overlap/cross the other side. Manual orders below the threshold can receive one bot addition.
+- The bot does not cancel/reprice existing orders automatically. It adds eligible missing levels up to the targets. No duplicate bot orders per price. If too few eligible levels exist, it reports the shortfall in Bot Log rather than putting orders outside the range or exceeding size limits.
+- Each side is limited to 2,000 examined levels per cycle. Reference changes never cause an order outside current bounds to be automatically removed.
+- ON runs a cycle immediately, then every configured interval (minimum 10 seconds). OFF stops new bot orders and retains existing orders. Save settings stops the bot. Bulk cancellation stops it too, so cancelled orders are not immediately replaced.
+- A missing, failing, or stale DEX reference stops the bot in DEX mode. Price data is provider-indexed, not a direct executable chain quote. Timestamp is fetch time.
 
-- The order book and reference price are explicitly demo data.
-- Manual orders are local paper records. They do not fill automatically or reach an exchange.
-- Configuration and orders are stored in localStorage for this browser and origin. They are not shared between users/devices.
-- Bot configuration is saved for the next implementation phase; it does not start automated trading or generate orders. No strategy is assumed.
-- No exchange account, balances, credentials, authentication, or live order execution is connected. Do not enter API credentials in the source or public configuration.
+### Price example
 
-## Next phase
+At reference **0.0000200**, the 2% range is **0.0000196–0.0000204**. Prices 0.0000219 and 0.0000220 are outside this band and will be rejected as starting prices. To use those levels, select a suitable reference; all configured starts must still satisfy the gap and tick rules.
 
-Provide the exchange, verified LF DEX pool, and desired quoting/repricing/cancellation rules. Add authenticated server-side account access and order execution, secure environment-managed API keys, exchange precision/minimum checks, inventory limits, stale-price handling, and a kill switch before live use.
+## Validation
 
-## Checks
+`npm test` covers opposite-side depth anchors, 2% bounds, gap, size constraints, duplicate prevention, $5 skip, completed targets, sub-minimum remainders, non-crossing behavior, and HTTP routes. `node --check public/app.js` checks browser script syntax.
 
-```sh
-npm test
-node --check server.mjs
-node --check public/app.js
-```
+For live trading, the next step requires an identified exchange, authenticated server-side execution, secure environment-managed API keys, current public/private order-book reconciliation, balance/precision/minimum checks, stale-price handling, and a durable single-worker lifecycle. The browser paper toggle does not place real exchange orders.

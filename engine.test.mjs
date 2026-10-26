@@ -1,0 +1,13 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {depth,plan,validate} from './public/engine.js';
+const s={tick:.0000001,buyDepth:100,sellDepth:100,min:3,max:4,skip:5,interval:30,range:2,gap:1,buyStart:0,sellStart:0};
+const order=(side,price,value,source='Manual')=>({side,price,amount:value/price,source});
+test('depth uses opposite best price, excludes orders outside 2%',()=>{const d=depth([order('buy',.00002,10),order('buy',.000019,999),order('sell',.0000201,20),order('sell',.000021,999)]);assert.equal(d.buy,10);assert.equal(d.sell,20);});
+test('empty book generates bounded non-crossing orders with one empty tick',()=>{const p=plan(s,[],.00002,()=>.5);assert.ok(p.orders.length);for(const o of p.orders){assert.ok(o.price>=.0000196-1e-15&&o.price<=.0000204+1e-15);assert.ok(o.price*o.amount>=3-1e-8&&o.price*o.amount<=4+1e-8);}const d=depth(p.orders);assert.ok((d.ask-d.bid)/s.tick>=2-1e-7);assert.ok(d.buy<=100&&d.sell<=100);});
+test('repeated cycle never duplicates existing bot levels',()=>{const p=plan(s,[],.00002,()=>.5);assert.equal(plan(s,p.orders,.00002).orders.length,0);});
+test('skips existing five-dollar manual level',()=>{const existing=[order('buy',.0000199,5),order('sell',.0000201,5)];const p=plan(s,existing,.00002,()=>.5);assert.ok(p.orders.every(o=>!existing.some(e=>e.price===o.price)));});
+test('no additions when both depth targets already met',()=>{assert.equal(plan(s,[order('buy',.0000199,100),order('sell',.0000201,100)],.00002).orders.length,0);});
+test('rejects contradictory price example and absent reference',()=>{assert.throws(()=>validate({...s,sellStart:.000022,buyStart:.0000219},.00002));assert.throws(()=>plan(s,[],null));});
+test('remainder below order minimum is left unfilled',()=>{const p=plan({...s,buyDepth:2,sellDepth:2},[],.00002);assert.equal(p.orders.length,0);assert.equal(p.notes.length,2);});
+test('keeps existing manual orders and does not cross them',()=>{const manual=[order('sell',.0000199,5),order('buy',.0000197,5)];const p=plan(s,manual,.00002,()=>.5);for(const o of p.orders){if(o.side==='buy')assert.ok(o.price<=.0000197+1e-15);else assert.ok(o.price>=.0000199-1e-15);}assert.equal(manual.length,2);});

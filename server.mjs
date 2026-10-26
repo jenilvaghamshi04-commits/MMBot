@@ -1,6 +1,6 @@
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
-const files={'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/style.css':['style.css','text/css']};
+const files={'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/engine.js':['engine.js','text/javascript'],'/style.css':['style.css','text/css']};
 http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');
  res.setHeader('X-Content-Type-Options','nosniff');
@@ -20,4 +20,4 @@ http.createServer(async(req,res)=>{
   const file=files[url.pathname];if(!file){res.writeHead(404);return res.end('Not found');}
   res.setHeader('Content-Type',file[1]);res.end(await readFile(new URL('./public/'+file[0],import.meta.url)));
  }catch(e){res.writeHead(502);res.end('Unable to load data. Please try again.');}
-}).listen(Number(process.env.PORT)||3000,'0.0.0.0');
+}).listen(Number(process.env.PORT)||Number(process.argv[process.argv.indexOf('--port')+1])||3000,'0.0.0.0');

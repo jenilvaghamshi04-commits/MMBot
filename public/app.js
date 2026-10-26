@@ -1,50 +1,42 @@
+import {depth,plan,validate} from './engine.js';
 const $=id=>document.getElementById(id);
-const defaults={exchange:'',demoPrice:0.00012,size:10,spread:1,levels:8,interval:30,chain:'',pool:''};
-let settings={...defaults},orders=[],side='buy',dexTimer,dexController,dexGeneration=0;
-try{settings={...defaults,...JSON.parse(localStorage.getItem('lf.settings')||'{}')};orders=JSON.parse(localStorage.getItem('lf.orders')||'[]');if(!Array.isArray(orders))orders=[];}catch{settings={...defaults};orders=[];}
-if(!Number.isFinite(settings.demoPrice)||settings.demoPrice<=0)settings={...defaults};
-const fmt=n=>Number(n).toLocaleString('en-US',{maximumSignificantDigits:9});
-const money=n=>Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
-function toast(message){$('toast').textContent=message;$('toast').style.display='block';clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').style.display='none',4500);}
-function save(){try{localStorage.setItem('lf.settings',JSON.stringify(settings));localStorage.setItem('lf.orders',JSON.stringify(orders));return true;}catch{toast('Browser storage unavailable. Changes last only for this session.');return false;}}
-function renderBook(){
- $('reference').textContent=fmt(settings.demoPrice);$('mid').textContent=fmt(settings.demoPrice);$('exchangeLabel').textContent=settings.exchange||'Exchange not selected';
- for(const type of ['asks','bids']){
-  const container=$(type);container.replaceChildren();const levels=Array.from({length:8},(_,i)=>i+1);if(type==='asks')levels.reverse();
-  for(const i of levels){const p=settings.demoPrice*(1+(type==='asks'?1:-1)*i*.001);const qty=(8+i*3)/p;const row=document.createElement('button');row.type='button';row.className='book-row';row.style.setProperty('--tint',type==='asks'?'#fa7c8c12':'#baff6512');row.style.setProperty('--depth',`${20+i*8}%`);
-   for(const [j,value] of [fmt(p),fmt(qty),money(qty*p)].entries()){const cell=document.createElement('span');cell.textContent=value;if(j===0)cell.className=type==='asks'?'red':'green';row.append(cell);}row.onclick=()=>{$('price').value=p.toPrecision(9);updateTotal();};container.append(row);
-  }
+const newId=()=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const defaults={exchange:'',mode:'manual',manualRef:.00002,range:2,tick:.0000001,gap:1,buyStart:0,sellStart:0,buyDepth:100,sellDepth:100,min:3,max:4,skip:5,interval:30,chain:'',pool:''};
+let s={...defaults},orders=[],running=false,timer,dexTimer,dexPrice=null,dexTime=0,generation=0,controller,side='buy',logs=[];
+try{const loaded=JSON.parse(localStorage.getItem('lf.mm.v2')||'null');if(loaded){s={...defaults,...loaded.settings};orders=loaded.orders||[];}}catch{}
+const fmt=n=>Number(n).toLocaleString('en-US',{maximumSignificantDigits:10}),money=n=>Number(n).toFixed(2);
+const ref=()=>s.mode==='manual'?s.manualRef:(dexTime&&Date.now()-dexTime<=Math.max(60000,s.interval*2000)?dexPrice:null);
+function persist(){try{localStorage.setItem('lf.mm.v2',JSON.stringify({settings:s,orders}));}catch{stop();toast('Unable to save. Bot stopped; browser storage unavailable.');}}
+function toast(t){$('toast').textContent=t;$('toast').style.display='block';clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').style.display='none',5000);}
+function log(t){logs.unshift(`${new Date().toLocaleTimeString()} · ${t}`);logs=logs.slice(0,150);$('logs').replaceChildren(...logs.map(t=>{const d=document.createElement('div');d.textContent=t;return d;}));}
+function stop(){running=false;clearInterval(timer);$('toggle').textContent='Turn bot ON';$('toggle').className='on';$('status').textContent='● Bot OFF';$('botState').textContent='OFF';}
+function render(){
+ const reference=ref();$('reference').textContent=reference?fmt(reference):'Reference unavailable';$('mid').textContent=reference?fmt(reference):'—';$('exchangeLabel').textContent=s.exchange||'Exchange not selected';$('refMode').textContent=s.mode==='manual'?'Manual reference':'DEX LF / USDT';
+ const d=depth(orders);$('buyDepthValue').textContent=money(d.buy);$('sellDepthValue').textContent=money(d.sell);$('buyTarget').textContent=`Target ${money(s.buyDepth)} USDT`;$('sellTarget').textContent=`Target ${money(s.sellDepth)} USDT`;$('buyRange').textContent=d.ask?`${fmt(d.ask*.98)} → first sell ${fmt(d.ask)}`:'Needs a first sell order';$('sellRange').textContent=d.bid?`First buy ${fmt(d.bid)} → ${fmt(d.bid*1.02)}`:'Needs a first buy order';$('spread').textContent=d.bid&&d.ask?`${((d.ask/d.bid-1)*100).toFixed(3)}% spread`:'No spread';
+ $('orders').replaceChildren();$('count').textContent=orders.length;$('empty').hidden=orders.length>0;
+ for(const o of [...orders].reverse()){
+  const tr=document.createElement('tr');[new Date(o.time).toLocaleTimeString(),o.side.toUpperCase(),fmt(o.price),fmt(o.amount),money(o.price*o.amount),o.source].forEach((v,i)=>{const td=document.createElement('td');td.textContent=v;if(i===1)td.className=o.side==='buy'?'green':'red';if(i===5)td.className=o.source==='Bot'?'cyan':'';tr.append(td);});const td=document.createElement('td'),b=document.createElement('button');b.textContent='✕';b.setAttribute('aria-label',`Cancel ${o.side} at ${o.price}`);b.onclick=()=>{orders=orders.filter(x=>x.id!==o.id);persist();render();log('Order cancelled manually. Bot may refill on its next cycle if ON.');};td.append(b);tr.append(td);$('orders').append(tr);
+ }
+ const groups=[];
+ for(const [id,side] of [['asks','sell'],['bids','buy']]){
+  const levels=new Map();for(const o of orders.filter(o=>o.side===side)){const k=o.price.toPrecision(12),entry=levels.get(k)||{price:o.price,amount:0,source:o.source};entry.amount+=o.amount;levels.set(k,entry);}
+  const sorted=[...levels.values()].sort((a,b)=>b.price-a.price);groups.push(...sorted.map(o=>({...o,side})));$(id).replaceChildren();const max=Math.max(1,...sorted.map(o=>o.amount*o.price));
+  for(const o of sorted){const b=document.createElement('button');b.className='book-row';b.style.setProperty('--depth',`${o.amount*o.price/max*100}%`);b.style.setProperty('--tint',side==='buy'?'#38661955':'#70272c55');[fmt(o.price),fmt(o.amount),money(o.price*o.amount)].forEach((v,i)=>{const span=document.createElement('span');span.textContent=v;if(i===0)span.className=side==='buy'?'green':'red';b.append(span);});b.onclick=()=>{$('price').value=o.price;updateNotional();};$(id).append(b);}
+ }
+ $('depthPlot').replaceChildren();if(!groups.length){const p=document.createElement('p');p.className='plot-empty';p.textContent='Add manual orders to see your depth profile.';$('depthPlot').append(p);}else{
+  const sorted=groups.sort((a,b)=>a.price-b.price);const max=Math.max(...sorted.map(o=>o.price*o.amount));for(const o of sorted){const bar=document.createElement('div');bar.className=`bar ${o.side}`;bar.style.height=`${Math.max(2,o.price*o.amount/max*90)}%`;bar.title=`${o.side} ${fmt(o.price)} · ${money(o.price*o.amount)} USDT`;$('depthPlot').append(bar);}
  }
 }
-function renderOrders(){
- $('orders').replaceChildren();let value=0;
- for(const order of orders){const row=document.createElement('tr');value+=order.price*order.amount;
-  const values=[new Date(order.time).toLocaleTimeString(), 'LF/USDT',order.side.toUpperCase(),fmt(order.price),fmt(order.amount),money(order.price*order.amount)];
-  values.forEach((value,i)=>{const td=document.createElement('td');td.textContent=value;if(i===2)td.className=order.side==='buy'?'green':'red';row.append(td);});
-  const cell=document.createElement('td'),btn=document.createElement('button');btn.className='secondary';btn.textContent='Cancel';btn.onclick=()=>{orders=orders.filter(o=>o.id!==order.id);save();renderOrders();toast('Demo order cancelled');};cell.append(btn);row.append(cell);$('orders').append(row);
- }
- $('empty').hidden=orders.length>0;$('orderCount').textContent=orders.length;$('countLabel').textContent=`(${orders.length})`;$('exposure').textContent=`${money(value)} USDT open notional`;
-}
-function updateTotal(){const total=Number($('price').value)*Number($('amount').value);$('total').textContent=`${money(Number.isFinite(total)?total:0)} USDT`;}
-function setSide(value){side=value;$('buyTab').className=value==='buy'?'selected':'';$('sellTab').className=value==='sell'?'selected sell':'';$('submitOrder').textContent=`Place demo ${value}`;$('submitOrder').style.background=value==='buy'?'var(--green)':'var(--red)';}
-$('buyTab').onclick=()=>setSide('buy');$('sellTab').onclick=()=>setSide('sell');$('price').oninput=updateTotal;$('amount').oninput=updateTotal;
-$('orderForm').onsubmit=e=>{e.preventDefault();const price=Number($('price').value),amount=Number($('amount').value);if(!Number.isFinite(price*amount)||price<=0||amount<=0)return toast('Enter a valid positive price and amount.');orders.unshift({id:crypto.randomUUID(),price,amount,side,time:Date.now()});save();renderOrders();toast(`Demo ${side} order placed`);};
-$('cancelAll').onclick=()=>{orders=[];save();renderOrders();toast('All demo orders cancelled');};
-function fillSettings(){for(const key of Object.keys(defaults))$(key).value=settings[key];}
-$('settingsForm').onsubmit=e=>{e.preventDefault();const next={};for(const key of Object.keys(defaults))next[key]=typeof defaults[key]==='number'?Number($(key).value):$(key).value.trim();if(Boolean(next.chain)!==Boolean(next.pool))return toast('Enter both blockchain ID and pool address.');if(!['demoPrice','size','spread','levels','interval'].every(k=>Number.isFinite(next[k])&&next[k]>0))return toast('Use valid positive numeric settings.');settings=next;const persisted=save();renderBook();if(persisted)toast('Settings saved');restartDex();};
-async function fetchDex(){
- dexController?.abort();const generation=++dexGeneration;const {chain,pool}=settings;$('dexPrice').textContent='—';
- if(!chain||!pool){$('dexStatus').textContent='Pool not configured';return;}
- dexController=new AbortController();const timeout=setTimeout(()=>dexController?.abort(),12000);$('dexStatus').textContent='Fetching pool reference…';
- try{const response=await fetch(`/api/dex?chain=${encodeURIComponent(chain)}&pool=${encodeURIComponent(pool)}`,{signal:dexController.signal});if(!response.ok)throw Error(response.status===404?'Pool not found':response.status===400?'Invalid pool configuration':'DEX feed unavailable');const data=await response.json();if(generation!==dexGeneration)return;
-  if(data.base?.symbol?.toUpperCase()!=='LF'||data.quote?.symbol?.toUpperCase()!=='USDT')throw Error('Pool must have LF as base and USDT as quote');
-  const price=Number(data.priceNative);if(!(price>0&&Number.isFinite(price)))throw Error('Pool price unavailable');
-  $('dexPrice').textContent=fmt(price);$('dexStatus').textContent=`${data.dex} · USDT · fetched ${new Date(data.fetchedAt).toLocaleTimeString()}`;
- }catch(error){if(generation===dexGeneration){$('dexPrice').textContent='—';$('dexStatus').textContent=error.name==='AbortError'?'DEX request timed out':error.message;}}
- finally{clearTimeout(timeout);}
-}
-function restartDex(){clearInterval(dexTimer);fetchDex();if(settings.pool)dexTimer=setInterval(fetchDex,Math.max(10,settings.interval)*1000);}
-$('fetchDex').onclick=()=>{if($('chain').value.trim()!==settings.chain||$('pool').value.trim()!==settings.pool)return toast('Save your DEX settings first.');fetchDex();};
-$('strategyBtn').onclick=()=>{$('reviewText').textContent=`${settings.exchange||'Exchange not selected'} · LF/USDT · ${settings.size} USDT per order · ${settings.spread}% spread · ${settings.levels} levels per side · ${settings.interval}s refresh.`;$('review').showModal();};$('closeReview').onclick=()=>$('review').close();
-$('reset').onclick=()=>{if(!confirm('Clear all demo orders and restore default settings?'))return;orders=[];settings={...defaults};save();fillSettings();renderBook();renderOrders();$('price').value=settings.demoPrice;$('amount').value='';updateTotal();restartDex();toast('Demo reset');};
-fillSettings();renderBook();renderOrders();$('price').value=settings.demoPrice;restartDex();
+function cycle(){if(!running)return;try{const reference=ref();if(!reference)throw Error('Valid reference unavailable; check the DEX feed or manual reference.');const result=plan(s,orders,reference);for(const o of result.orders)orders.push({...o,id:newId(),time:Date.now()});persist();render();$('lastRun').textContent=`Last cycle ${new Date().toLocaleTimeString()}`;if(result.orders.length)log(`Placed ${result.orders.length} paper bot orders.`);if(result.notes.length)log(result.notes.join(' '));}catch(e){stop();log(`Stopped: ${e.message}`);toast(e.message);}}
+$('toggle').onclick=()=>{if(running){stop();log('Bot switched OFF. Existing orders retained.');return;}try{validate(s,ref());running=true;$('toggle').textContent='Turn bot OFF';$('toggle').className='off';$('status').textContent='● Bot ON · paper';$('botState').textContent='ON · paper';log('Bot switched ON.');cycle();if(running)timer=setInterval(cycle,s.interval*1000);}catch(e){toast(e.message);showSettings();}};
+function showSettings(){for(const key of Object.keys(defaults))if($(key))$(key).value=s[key];$('settingsError').textContent='';$('settingsDialog').showModal();}
+$('openSettings').onclick=showSettings;$('editConfig').onclick=showSettings;$('closeSettings').onclick=()=>$('settingsDialog').close();
+$('settingsForm').onsubmit=e=>{e.preventDefault();const next={...defaults};for(const key of Object.keys(defaults))if($(key))next[key]=typeof defaults[key]==='number'?Number($(key).value):$(key).value.trim();try{if(Boolean(next.chain)!==Boolean(next.pool))throw Error('Enter both blockchain and pool address.');if(next.mode==='dex'&&(!next.chain||!next.pool))throw Error('DEX mode requires a verified LF/USDT pool.');validate(next,next.mode==='manual'?next.manualRef:(dexPrice||next.manualRef));stop();s=next;persist();render();restartDex();$('settingsDialog').close();log('Settings saved. Bot OFF; press ON to start.');toast('Settings saved. Bot remains OFF.');}catch(error){$('settingsError').textContent=error.message;}};
+async function fetchDex(){controller?.abort();const request=++generation;controller=new AbortController();const localController=controller;const timeout=setTimeout(()=>localController.abort(),12000);dexPrice=null;dexTime=0;$('dexPrice').textContent='—';if(!s.chain||!s.pool){clearTimeout(timeout);$('dexStatus').textContent='DEX pool not configured';render();return;}$('dexStatus').textContent='Fetching DEX price…';try{const response=await fetch(`/api/dex?chain=${encodeURIComponent(s.chain)}&pool=${encodeURIComponent(s.pool)}`,{signal:controller.signal});if(!response.ok)throw Error('DEX pool unavailable');const data=await response.json();if(request!==generation)return;if(data.base?.symbol?.toUpperCase()!=='LF'||data.quote?.symbol?.toUpperCase()!=='USDT')throw Error('Pool must be LF base / USDT quote');const price=Number(data.priceNative);if(!Number.isFinite(price)||price<=0)throw Error('Invalid DEX price');dexPrice=price;dexTime=Date.now();$('dexPrice').textContent=fmt(price);$('dexStatus').textContent=`${data.dex} · fetched ${new Date(dexTime).toLocaleTimeString()}`;}catch(e){if(request!==generation)return;$('dexStatus').textContent=e.name==='AbortError'?'DEX request timed out':e.message;if(s.mode==='dex'&&running){stop();log('Bot stopped: DEX feed unavailable.');}}finally{clearTimeout(timeout);if(request===generation)render();}}
+function restartDex(){clearInterval(dexTimer);fetchDex();if(s.pool)dexTimer=setInterval(fetchDex,Math.max(10,s.interval)*1000);}$('refreshDex').onclick=()=>{if($('pool').value.trim()!==s.pool||$('chain').value.trim()!==s.chain)return toast('Save DEX configuration first.');fetchDex();};
+function updateNotional(){const n=Number($('price').value)*Number($('amount').value);$('notional').value=Number.isFinite(n)&&n>0?n.toPrecision(10):'';}$('price').oninput=updateNotional;$('amount').oninput=updateNotional;$('notional').oninput=()=>{const p=Number($('price').value);if(p>0)$('amount').value=(Number($('notional').value)/p).toPrecision(12);};
+function setSide(value){side=value;$('buyTab').className=value==='buy'?'selected':'';$('sellTab').className=value==='sell'?'selected sell':'';$('submitOrder').textContent=`${value==='buy'?'Buy':'Sell'} LF · demo`;$('submitOrder').className=`full ${value==='buy'?'on':'off'}`;}$('buyTab').onclick=()=>setSide('buy');$('sellTab').onclick=()=>setSide('sell');
+$('orderForm').onsubmit=e=>{e.preventDefault();const price=Number($('price').value),amount=Number($('amount').value);if(!Number.isFinite(price*amount)||price<=0||amount<=0)return toast('Enter a positive price and amount.');const d=depth(orders);if(side==='buy'&&d.ask&&price>=d.ask||side==='sell'&&d.bid&&price<=d.bid)return toast('This limit would cross the opposite side. Use a non-crossing price.');orders.push({id:newId(),side,price,amount,source:'Manual',time:Date.now()});persist();render();log(`Manual paper ${side} added at ${fmt(price)}.`);};
+function cancel(source){stop();const before=orders.length;orders=source?orders.filter(o=>o.source!==source):[];persist();render();log(`Cancelled ${before-orders.length} ${source||''} orders. Bot OFF.`);}$('cancelBot').onclick=()=>cancel('Bot');$('cancelManual').onclick=()=>cancel('Manual');$('cancelAll').onclick=()=>cancel();
+for(const button of document.querySelectorAll('[data-tab]'))button.onclick=()=>{for(const b of document.querySelectorAll('[data-tab]'))b.classList.toggle('active',b===button);$('ordersView').hidden=button.dataset.tab!=='orders';$('logView').hidden=button.dataset.tab!=='log';};
+$('price').value=s.manualRef;stop();render();restartDex();log('Workspace loaded. Bot OFF. No sample orders.');
