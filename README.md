@@ -85,3 +85,13 @@ Explicit bot starting prices follow the DEX delta from their saved reference and
 The Bot Log reports old/new DEX prices, cancellation count and replacement count. This is polling-based, with the configured interval (minimum 10 seconds), and runs only while the tab is open and bot ON. No background exchange worker or real trading is connected.
 
 A native SVG favicon (lime M and cyan upward arrow on black) is served at `/favicon.svg`; the page includes icon and theme-color metadata.
+
+## Paper matching and same-price order fix
+
+Manual crossing orders now **simulate fills** instead of remaining open on the opposite side at the same price. A buy limit consumes resting sells priced at or below its limit (lowest price first); a sell consumes resting buys priced at or above its limit (highest price first). Equal prices follow creation time. Fills execute at resting maker prices. Fully filled records leave Open Orders, partial fills reduce the resting quantity, and only the unfilled incoming remainder stays open. Edits replace the prior manual record before matching so an order cannot match itself.
+
+Trade History stores local simulated fill price, quantity, USDT value, time, incoming side and resting source (Manual, Bot or Depth). It persists with browser state. There are no actual exchange trades, balances or fees. This supersedes the earlier statement that manual crossing entries merely rest without matching. Manual price entry still has no bot DEX, gap or tick restriction.
+
+On the first load of this version, a one-time chronological replay settles legacy crossed paper records, preserving unmatched quantities and recording the resulting simulated fills. This clears the previous equal-price buy/sell display. The migration is versioned to avoid repeated replay. Bot orders continue to follow DEX and depth rules; an active bot can refill missing liquidity on its next cycle after a paper fill.
+
+Regression tests cover the reported same-price case, partial fills, price/time priority, input immutability, residual quantities and migration. Browser QA confirmed a manual sell consumed an existing bid, left no same-price ask, and appeared in Trade History.

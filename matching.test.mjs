@@ -1,0 +1,10 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {matchPaperOrder,settleLegacyBook} from './public/matching.js';
+const o=(id,side,price,amount,source='Manual',time=1)=>({id,side,price,amount,source,time});
+test('manual sell at existing bid fills it instead of opening same-price ask',()=>{const resting=o('b','buy',.0000215,186046.5116,'Bot');const result=matchPaperOrder([resting],o('s','sell',.0000215,186046.5116));assert.equal(result.orders.length,0);assert.equal(result.fills.length,1);assert.equal(result.fills[0].makerSource,'Bot');assert.equal(resting.amount,186046.5116);});
+test('buy crosses at resting ask price, with partial quantity reduction',()=>{const result=matchPaperOrder([o('s','sell',.0000215,100,'Depth')],o('b','buy',.000022,40));assert.equal(result.orders[0].amount,60);assert.equal(result.fills[0].price,.0000215);assert.equal(result.remaining,0);});
+test('price-time matching across levels leaves only unfilled remainder',()=>{const result=matchPaperOrder([o('a','sell',2,10,'Bot',1),o('b','sell',1,20,'Depth',2),o('c','sell',2,5,'Manual',3)],o('x','buy',2,40));assert.deepEqual(result.fills.map(f=>f.makerId),['b','a','c']);assert.equal(result.remaining,5);assert.deepEqual(result.orders,[o('x','buy',2,5)]);});
+test('non-crossing manual price remains unrestricted and open',()=>{const result=matchPaperOrder([o('s','sell',2,10)],o('b','buy',.123456789,5));assert.equal(result.fills.length,0);assert.equal(result.orders.length,2);});
+test('legacy crossed records settle once without inventing quantity or changing inputs',()=>{const orders=[o('b','buy',2,10,'Bot',1),o('s','sell',2,10,'Manual',2)],before=JSON.stringify(orders);const result=settleLegacyBook(orders);assert.equal(result.orders.length,0);assert.equal(result.fills.length,1);assert.equal(JSON.stringify(orders),before);assert.equal(settleLegacyBook(result.orders).fills.length,0);});
+test('floating remainder does not create a phantom same-price order',()=>{const result=matchPaperOrder([o('a','sell',1,.1),o('b','sell',1,.2)],o('x','buy',1,.3));assert.equal(result.remaining,0);assert.equal(result.orders.length,0);});
