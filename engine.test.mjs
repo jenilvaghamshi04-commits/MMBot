@@ -41,3 +41,20 @@ test('boundary depth ignores occupied $5 level and does not duplicate on next cy
 test('boundary wall never violates DEX cap when no valid range exists',()=>{
  const result=planWithDepth(s,[order('sell',.000021,5)],.00002);for(const o of result.orders)assert.ok(o.side==='buy'?o.price<=.00002:o.price>=.00002);
 });
+test('five divisions split remaining depth equally at distinct consecutive ticks',()=>{
+ const config={...s,tick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};
+ const result=planWithDepth(config,[],.00002132,()=>.5);
+ for(const side of ['buy','sell']){const walls=result.orders.filter(o=>o.source==='Depth'&&o.side===side);assert.equal(walls.length,5);const value=walls[0].price*walls[0].amount;for(let i=0;i<5;i++){assert.ok(Math.abs(walls[i].price*walls[i].amount-value)<1e-7);assert.equal(walls[i].divisionIndex,i);if(i)assert.ok(Math.abs(Math.abs(walls[i].price-walls[i-1].price)-config.tick)<1e-15);assert.ok(side==='buy'?walls[i].price<=.00002132:walls[i].price>=.00002132);}assert.ok(Math.abs(depth(result.orders)[side]-500)<1e-7);}
+ const cleaned=reconcileBotOrders(result.orders,.00002132,config.tick,config);assert.equal(cleaned.removed.length,0);
+ const next=planWithDepth(config,cleaned.orders,.00002132);assert.equal(next.orders.length,0);assert.equal(next.updates.length,0);
+});
+test('changed division count removes old depth layout and preserves manual orders',()=>{
+ const config={...s,tick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};
+ const manual=order('buy',.0000212,5);const first=planWithDepth(config,[manual],.00002132).orders;
+ const changed={...config,buyDivisions:3,sellDivisions:3};const clean=reconcileBotOrders([manual,...first],.00002132,config.tick,changed);assert.ok(clean.orders.includes(manual));assert.equal(clean.orders.filter(o=>o.source==='Depth').length,0);
+ const next=planWithDepth(changed,clean.orders,.00002132);for(const side of ['buy','sell'])assert.equal(next.orders.filter(o=>o.source==='Depth'&&o.side===side).length,3);
+});
+test('insufficient ticks does not collapse requested divisions or cross DEX',()=>{
+ const result=planWithDepth({...s,buyDepth:500,sellDepth:500,buyDivisions:100,sellDivisions:100},[],.00002);assert.equal(result.orders.filter(o=>o.source==='Depth').length,0);assert.match(result.notes.join(' '),/fewer divisions or a smaller tick/);
+ assert.throws(()=>validate({...s,buyDivisions:1.5},.00002));assert.throws(()=>validate({...s,sellDivisions:101},.00002));
+});
