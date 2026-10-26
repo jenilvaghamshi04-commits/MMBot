@@ -101,3 +101,15 @@ test('explicit bot starts track DEX delta without moving manual orders',()=>{
 test('missing DEX throws before altering input orders and legacy quotes rebuild',()=>{
  const existing=[order('buy',.0000199,4,'Bot'),order('sell',.0000201,4,'Bot')];const before=JSON.stringify(existing);assert.throws(()=>quoteCycle(s,existing,null,.00002));assert.equal(JSON.stringify(existing),before);const result=quoteCycle(s,existing,.00002,null);assert.equal(result.cancelled.length,2);assert.ok(result.orders.length>0);
 });
+function applyCycle(result){const kept=result.retained.map(o=>result.updates.find(u=>u.id===o.id)||o);return [...kept,...result.orders];}
+test('full depth target does not block missing normal quotes near DEX',()=>{
+ const config={...s,tick:1e-7,depthTick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};const reference=.00002132;
+ const first=quoteCycle(config,[],reference,null,null,()=>.5).orders.map((o,i)=>({...o,id:String(i)}));const bestBuy=Math.max(...first.filter(o=>o.side==='buy'&&o.source==='Bot').map(o=>o.price));const removed=first.find(o=>o.source==='Bot'&&o.side==='buy'&&o.price===bestBuy);
+ const book=first.filter(o=>o!==removed).map(o=>({...o}));const wall=book.find(o=>o.source==='Depth'&&o.side==='buy');wall.amount+=removed.price*removed.amount/wall.price;
+ assert.ok(Math.abs(depth(book).buy-500)<1e-7);
+ const next=quoteCycle(config,book,reference,reference,reference,()=>.5);assert.ok(next.orders.some(o=>o.source==='Bot'&&o.side==='buy'&&Math.abs(o.price-bestBuy)<1e-15));const final=applyCycle(next);assert.ok(Math.abs(depth(final).buy-500)<1e-7);
+});
+test('default quotes use nearest legal DEX tick and preserve the configured gap',()=>{const result=validate(s,.00002132);assert.ok(Math.abs(result.buy-.0000213)<1e-15);assert.ok(result.sell-result.buy>=s.tick*(s.gap+1)-1e-15);assert.ok(result.sell>=.00002132);});
+test('obsolete depth wall is removed when normal and manual depth fill target',()=>{
+ const config={...s,buyDepth:8,sellDepth:8};const manual=order('sell',.0000201,5);const wall=order('buy',.0000197,8,'Depth');const result=quoteCycle(config,[manual,wall],.00002,.00002,.00002,()=>.5);assert.ok(result.retained.includes(manual));assert.ok(result.cancelled.some(o=>o.source==='Depth'));const final=applyCycle(result);assert.ok(Math.abs(depth(final).buy-8)<1e-7);
+});

@@ -95,3 +95,11 @@ Trade History stores local simulated fill price, quantity, USDT value, time, inc
 On the first load of this version, a one-time chronological replay settles legacy crossed paper records, preserving unmatched quantities and recording the resulting simulated fills. This clears the previous equal-price buy/sell display. The migration is versioned to avoid repeated replay. Bot orders continue to follow DEX and depth rules; an active bot can refill missing liquidity on its next cycle after a paper fill.
 
 Regression tests cover the reported same-price case, partial fills, price/time priority, input immutability, residual quantities and migration. Browser QA confirmed a manual sell consumed an existing bid, left no same-price ask, and appeared in Trade History.
+
+## Refill normal levels near DEX
+
+The normal-ladder budget now counts manual and normal liquidity separately from Depth walls. Previously a fully funded Depth wall could prevent missing normal levels near DEX from being restored. Missing eligible normal levels now fill first, and the wall allocation shrinks to keep the total depth target. Obsolete Depth walls are removed if manual/normal liquidity fully funds the target. This still respects per-order limits, skip rules, both tick settings, DEX limits and the central gap; a level prohibited by those rules is not filled.
+
+Automatic starting prices now choose the nearest legal buy tick at or below DEX and a sell tick that preserves the configured empty gap. A manual paper fill while the bot is ON triggers an immediate refill cycle, rather than waiting for the next timer. Unchanged DEX quotes still run periodic refill cycles; changed DEX quotes cancel/rebuild as before. OFF disables refills. DEX price movement alone does not invent a trade: this feature places resting paper orders, while manual crossing orders generate simulated fills in Trade History.
+
+Regression tests cover normal-level refill when total depth already meets target, nearest legal starting ticks, and removal of obsolete Depth walls without affecting manual records.

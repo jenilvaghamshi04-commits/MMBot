@@ -22,8 +22,8 @@ export function validate(s,ref){
  if(ref/s.tick>1e12)throw Error('Tick size is too small');
  const round=n=>Number(n.toPrecision(12));
  const ceiling=round(Math.floor(ref/s.tick+1e-7)*s.tick),floor=round(Math.ceil(ref/s.tick-1e-7)*s.tick);
- let buy=s.buyStart||round((Math.floor(ref/s.tick+1e-7)-1)*s.tick);
- let sell=s.sellStart||round((Math.ceil(ref/s.tick-1e-7)+s.gap)*s.tick);
+ let buy=s.buyStart||round(Math.floor(ref/s.tick+1e-7)*s.tick);
+ let sell=s.sellStart||round(Math.max(Math.ceil(ref/s.tick-1e-7),Math.floor(ref/s.tick+1e-7)+s.gap+1)*s.tick);
  // DEX is a hard side boundary, not a second independent ±2% anchor.
  if(buy>ceiling+1e-15)throw Error('Buy start cannot be above the DEX price. Set it to 0 for automatic.');
  if(sell<floor-1e-15)throw Error('Sell start cannot be below the DEX price. Set it to 0 for automatic.');
@@ -39,7 +39,7 @@ export function planLadder(s,orders,ref,random=Math.random){
   const updated=depth(all);
   const anchor=side==='buy'?(updated.ask??starts.sell):(updated.bid??starts.buy);
   // Count existing liquidity even if the opposite side has not been seeded yet.
-  const eligible=o=>o.side===side&&(side==='buy'?o.price>=anchor*.98-1e-15&&o.price<anchor:o.price<=anchor*1.02+1e-15&&o.price>anchor);
+  const eligible=o=>o.source!=='Depth'&&o.side===side&&(side==='buy'?o.price>=anchor*.98-1e-15&&o.price<anchor:o.price<=anchor*1.02+1e-15&&o.price>anchor);
   const current=all.filter(eligible).reduce((v,o)=>v+o.price*o.amount,0);
   const lower=side==='buy'?anchor*.98:Math.max(ref,anchor+s.tick*(s.gap+1));
   const upper=side==='sell'?anchor*1.02:Math.min(ref,anchor-s.tick*(s.gap+1));
@@ -100,7 +100,7 @@ export function plan(s,orders,ref,random=Math.random){
  const depthTick=s.depthTick??s.tick;
  const ladder=planLadder(s,orders,ref,random),all=orders.map(o=>({...o}));
  all.push(...ladder.orders);
- const added=[...ladder.orders],updates=[],notes=[],boundary={};
+ const added=[...ladder.orders],updates=[],notes=[],boundary={},removed=[];
  for(const side of ['buy','sell']){
   const d=depth(all),anchor=side==='buy'?d.ask:d.bid,target=side==='buy'?s.buyDepth:s.sellDepth;
   const missing=Math.max(0,target-d[side]);
@@ -117,7 +117,7 @@ export function plan(s,orders,ref,random=Math.random){
   const existingWallValue=existingWalls.reduce((sum,o)=>sum+o.price*o.amount,0);
   const budget=Math.max(0,target-(d[side]-existingWallValue));
   boundary[side]={price,missing,divisions,perOrder:budget/divisions,prices,status:missing<1e-8?'Target reached':allValid?`Split depth into ${divisions} orders`:'Not enough valid ticks for all divisions'};
-  if(budget<1e-8)continue;
+  if(budget<1e-8){removed.push(...existingWalls);continue;}
   if(!allValid){notes.push(`${side}: cannot fit ${divisions} depth divisions inside the 2% band, DEX limit and gap. Use fewer divisions or a smaller depth tick size.`);continue;}
   // Retain weights for an existing split so polling does not continually resize it.
   // Missing/legacy weights are randomized once; totals always equal the budget.
@@ -138,7 +138,7 @@ export function plan(s,orders,ref,random=Math.random){
    else{const o={side,price:p,amount:value/p,source:'Depth',divisionIndex:i,divisionCount:divisions,depthWeight:weights[i]};all.push(o);added.push(o);}
   }
  }
- return {...ladder,orders:added,updates,notes,boundary};
+ return {...ladder,orders:added,updates,notes,boundary,removed};
 }
 
 export function settingsAtReference(s,baseReference,reference){
@@ -157,5 +157,6 @@ export function quoteCycle(s,orders,reference,previousReference=null,startRefere
  const legacy=!previousReference&&orders.some(owns);
  const cleaned=changed||legacy?{orders:orders.filter(o=>!owns(o)),removed:orders.filter(owns)}:reconcileBotOrders(orders,reference,effective.tick,effective);
  const result=plan(effective,cleaned.orders,reference,random);
- return {...result,retained:cleaned.orders,cancelled:cleaned.removed,requoted:changed||legacy,previousReference,reference};
+ const key=o=>o.id??`${o.source}:${o.side}:${o.price}`;const deleted=new Set(result.removed.map(key));
+ return {...result,retained:cleaned.orders.filter(o=>!deleted.has(key(o))),cancelled:[...cleaned.removed,...result.removed],requoted:changed||legacy,previousReference,reference};
 }
