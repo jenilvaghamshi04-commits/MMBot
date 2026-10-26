@@ -122,3 +122,43 @@ On first load of this layout version, prior bot start overrides reset to automat
 Normal ladder orders now use the configured Minimum small order and Maximum small order range without forcing every available level to the maximum. When there are too few ticks to fund the entire target with small orders, values are drawn independently inside the range and the remaining budget goes to the separate Depth split. When an exact normal allocation is feasible, a balanced order count avoids unnecessarily forcing every order to maximum size while retaining min/max feasibility.
 
 A versioned migration invalidates the prior quote reference once so existing fixed-size bot quotes are rebuilt on the next ON cycle, without starting the bot or changing manual orders. Tests cover coarse and fine normal ticks, varied values inside the configured range, and maintenance of the full target including Depth orders. If minimum equals maximum, fixed sizing is expected.
+
+# Gate live terminal: /live
+
+The demo remains at `/` with its original browser-local settings, orders, matching and fills. Top **Demo / Live** buttons switch pages. The new `/live` page uses Gate's real LF_USDT public order book, ticker and market trades through server-side APIv4 requests. Demo fills never enter the live page. Gate live settings use a separate browser-storage key. Live account orders and balances come from Gate, not browser records.
+
+## Render activation
+
+Deploy the latest main commit using the same `npm start` command. Add these variables in Render Environment:
+
+| Variable | Value |
+| --- | --- |
+| `LIVE_ADMIN_TOKEN` | A private random operator token of at least 16 characters; choose a unique strong value. |
+| `LIVE_TRADING_ENABLED` | `false` for public feeds/account preview only; explicitly set `true` when ready to submit real orders. |
+| `GATE_BOT_TAG` | `lfmm` by default; stable ownership tag, 1–10 letters/numbers/underscore/hyphen. |
+
+Use HTTPS for the deployed terminal. Open `/live`, click **Connect API**, enter the operator token plus your Gate API Key and Secret Key. Use Gate spot read/write permissions, no withdrawals, and restrict the API IP allowlist to your server's egress IPs. The server validates the connection with a read-only account request. Keys/secrets are never put in the repository, browser storage, URLs or logs; they are held in server memory only. The operator token stays in page memory. Use **Resume operator session** with just the token after navigation/reload to reconnect the controls to an already connected server account.
+
+Settings → Save → Preview algorithm → review planned orders → **Start LIVE bot**. The live bot never starts merely from switching pages, connecting credentials, deploying or restarting. Public market data requires no API key. Account/preview/start/stop/manual endpoints require the operator token. Real writes also require `LIVE_TRADING_ENABLED=true`.
+
+## Live execution behavior
+
+- Reuses the same `engine.js` for DEX-anchored quotes, one-tick spread, normal/depth ticks, randomized min/max normal values, random depth divisions and 2% opposite-side bands.
+- Public LF/WETH DEX USD reference is fetched server-side for every live cycle, using the configured LF pool and the labeled 1 USDT = $1 assumption. No stale/browser-supplied execution price is trusted.
+- Public-book liquidity is included in depth and occupied-price checks. Bot-owned open quantity is subtracted from aggregate market levels before private bot orders are included, to avoid counting that quantity twice. The visible book is a 100-level snapshot, not a full historical stream.
+- Reads actual Gate open orders and remaining quantity each cycle. Fills reduce/remove exchange orders and the next cycle refills eligible levels. No paper fills or fake exchange trades are generated.
+- Changed DEX references cancel and rebuild tagged bot orders. Same-reference cycles refill missing levels and update the random depth amounts where needed. Public Gate liquidity can prevent an exact DEX-level quote under post-only and crossing rules; the worker stops on an exchange rejection instead of forcing a taker order.
+- Bot orders use post-only (`poc`) spot limits. No leverage, margin, borrowing, wallet transfers or withdrawals are used. Manual live limit orders use GTC and may execute immediately at a crossing price; the bot must be OFF for manual entry.
+- Exchange pair metadata controls price/quantity precision, minimum/maximum order sizes and tradability. As observed during implementation, LF_USDT returned 8 price decimals, 0 LF quantity decimals and a $3 minimum quote notional. Metadata is loaded again rather than hardcoded. Tick sizes must be integer multiples of the exchange price tick. LF quantities round down; rejected or sub-minimum plans are reported rather than silently increased. Rounding means actual totals may be slightly below strategy targets.
+- A maximum of 100 order writes per cycle is enforced. Available LF/USDT balances are checked after planned cancellations; a 0.3% quote reserve is used for buys. These checks do not eliminate exchange execution races; exchange responses remain authoritative.
+- The ownership prefix is `t-<GATE_BOT_TAG>-`. Only that prefix is cancelled/repriced by the bot. Manual and other-tag exchange orders remain untouched. Use one running instance per account/tag. Do not run multiple live workers sharing a tag.
+- **Stop bot · keep orders** stops generation while retaining existing exchange orders. **Stop & cancel bot orders** cancels only tagged bot orders. **Disconnect** stops, cancels tagged orders, and then removes the in-memory credentials. Errors can leave resting orders; inspect My Open Exchange Orders and use cancellation controls.
+
+## Runtime and verification limits
+
+The live worker runs in the Node server and can continue after switching to Demo or closing the browser. It requires an always-running server. Restart/redeploy loses credentials and worker settings and starts OFF; existing exchange orders can remain and must be reviewed. After reconnecting, matching-tag orders are recognized and rebuilt only when you explicitly start. No live credentials, private account calls or real orders were used during development. Tests use mocked exchange responses; signing matches Gate's published signature vector. Public LF_USDT metadata was verified against the Gate API. Live authenticated behavior must be checked with your account before unattended use.
+
+Official references:
+- https://www.gate.com/docs/developers/apiv4/en/
+- https://www.gate.com/docs/developers/apiv4/en/spot/
+- https://www.gate.com/trade/LF_USDT
