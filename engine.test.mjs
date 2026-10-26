@@ -87,3 +87,17 @@ test('legacy equal walls randomize once and retain weights after update',()=>{
 test('small random split budgets never create zero-size depth orders',()=>{
  const config={...s,tick:1e-8,depthTick:1e-10,buyDepth:1,sellDepth:1,buyDivisions:100,sellDivisions:100};let i=0;const result=planWithDepth(config,[order('buy',.00001999,.001),order('sell',.00002001,.001)],.00002,()=>i++%2?0:1);for(const o of result.orders)assert.ok(o.amount>0);assert.equal(result.orders.filter(o=>o.source==='Depth').length,200);for(const side of ['buy','sell'])assert.ok(Math.abs(depth([...result.orders,order('buy',.00001999,.001),order('sell',.00002001,.001)])[side]-1)<1e-7);
 });
+import {quoteCycle,settingsAtReference} from './public/engine.js';
+test('DEX move up or down cancels all owned orders and preserves manual records',()=>{
+ const config={...s,depthTick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};const first=quoteCycle(config,[],.00002132,null,null,()=>.5);assert.ok(first.orders.some(o=>o.source==='Depth'));
+ const manual=order('buy',.00001,5);const old=[...first.orders,manual];for(const reference of [.0000214,.00002125]){const result=quoteCycle(config,old,reference,.00002132,.00002132,()=>.5);assert.equal(result.cancelled.length,first.orders.length);assert.deepEqual(result.retained,[manual]);assert.ok(result.requoted);assert.ok(result.orders.length);for(const o of result.orders)assert.ok(o.side==='buy'?o.price<=reference+1e-15:o.price>=reference-1e-15);}
+});
+test('unchanged DEX does not cancel or rerandomize stable quotes',()=>{
+ const config={...s,depthTick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};const first=quoteCycle(config,[],.00002132,null,null,()=>.3);const next=quoteCycle(config,first.orders,.00002132,.00002132,.00002132,()=>.9);assert.equal(next.cancelled.length,0);assert.equal(next.orders.length,0);assert.equal(next.updates.length,0);assert.equal(next.requoted,false);
+});
+test('explicit bot starts track DEX delta without moving manual orders',()=>{
+ const config={...s,buyStart:.0000199,sellStart:.0000201};const shifted=settingsAtReference(config,.00002,.000022);assert.ok(Math.abs(shifted.buyStart-.0000219)<1e-15);assert.ok(Math.abs(shifted.sellStart-.0000221)<1e-15);assert.doesNotThrow(()=>validate(shifted,.000022));assert.equal(config.buyStart,.0000199);
+});
+test('missing DEX throws before altering input orders and legacy quotes rebuild',()=>{
+ const existing=[order('buy',.0000199,4,'Bot'),order('sell',.0000201,4,'Bot')];const before=JSON.stringify(existing);assert.throws(()=>quoteCycle(s,existing,null,.00002));assert.equal(JSON.stringify(existing),before);const result=quoteCycle(s,existing,.00002,null);assert.equal(result.cancelled.length,2);assert.ok(result.orders.length>0);
+});

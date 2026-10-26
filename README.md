@@ -75,3 +75,13 @@ Depth divisions now receive random positive weights (0.5–1.5), normalized to t
 Random weights are persisted with Depth records; routine refreshes do not reroll them. Target changes scale the allocation to the new required budget. Legacy equal-sized Depth orders receive random weights once on the next active cycle. Changing the depth layout produces a fresh allocation. Tick, DEX and 2% price rules for the bot remain in force.
 
 Manual entry and editing accept any finite positive price and quantity, including a buy above the lowest sell or a sell below the highest buy. No bot DEX, gap, tick-alignment or crossing rule restricts manual records. Only basic numeric validation applies. These remain paper order records; entering a crossing price does not execute or simulate a trade against another order. Browser QA confirmed acceptance in both directions. Automated tests cover randomized totals, stable refreshes, legacy migration, changed targets, and positive amounts for small split budgets.
+
+## Follow DEX: cancel and replace
+
+While ON, every successful DEX refresh also runs an order cycle. If the reference changed, **all Bot and Depth records are cancelled and replaced** with a fresh plan at the updated DEX reference. Both increases and decreases are handled. New normal prices align to the normal tick; depth prices and divisions align to the depth tick and current opposite first order. Existing DEX side limits, gap, depth targets and random amount rules still apply. Replacements receive fresh IDs/timestamps and randomized depth sizing. Unchanged references retain existing order sizes and IDs. Manual records remain fixed and are never automatically cancelled or moved.
+
+Explicit bot starting prices follow the DEX delta from their saved reference and round to the normal tick. The original settings and saved quote reference persist so the bot can reprice after the user turns it ON following a reload or price movement while OFF. Legacy bot records without a saved reference are rebuilt on the next active cycle. Saving settings stops execution and resets the quoting baseline. Invalid/missing/stale DEX data cannot create orders. Cancellation/replacement is planned before state is committed; an invalid plan leaves the input records unchanged and stops the bot.
+
+The Bot Log reports old/new DEX prices, cancellation count and replacement count. This is polling-based, with the configured interval (minimum 10 seconds), and runs only while the tab is open and bot ON. No background exchange worker or real trading is connected.
+
+A native SVG favicon (lime M and cyan upward arrow on black) is served at `/favicon.svg`; the page includes icon and theme-color metadata.

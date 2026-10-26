@@ -140,3 +140,22 @@ export function plan(s,orders,ref,random=Math.random){
  }
  return {...ladder,orders:added,updates,notes,boundary};
 }
+
+export function settingsAtReference(s,baseReference,reference){
+ if(!Number.isFinite(reference)||reference<=0)throw Error('Fresh DEX reference unavailable');
+ if(!Number.isFinite(baseReference)||baseReference<=0)return {...s};
+ const delta=reference-baseReference;
+ const align=(price,buy)=>Number(((buy?Math.floor((price+delta)/s.tick+1e-7):Math.ceil((price+delta)/s.tick-1e-7))*s.tick).toPrecision(12));
+ return {...s,buyStart:s.buyStart?align(s.buyStart,true):0,sellStart:s.sellStart?align(s.sellStart,false):0};
+}
+
+export function quoteCycle(s,orders,reference,previousReference=null,startReference=null,random=Math.random){
+ const effective=settingsAtReference(s,startReference??previousReference,reference);
+ validate(effective,reference);
+ const owns=o=>['Bot','Depth'].includes(o.source);
+ const changed=Number.isFinite(previousReference)&&previousReference>0&&Math.abs(reference-previousReference)>1e-15;
+ const legacy=!previousReference&&orders.some(owns);
+ const cleaned=changed||legacy?{orders:orders.filter(o=>!owns(o)),removed:orders.filter(owns)}:reconcileBotOrders(orders,reference,effective.tick,effective);
+ const result=plan(effective,cleaned.orders,reference,random);
+ return {...result,retained:cleaned.orders,cancelled:cleaned.removed,requoted:changed||legacy,previousReference,reference};
+}
