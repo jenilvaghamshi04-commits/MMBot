@@ -12,7 +12,7 @@ export function validateConfig(s){
  if(s.min>s.max)throw Error('Minimum order must not exceed maximum');
  if(s.interval<10)throw Error('Refresh must be at least 10 seconds');
  if(s.range!==2)throw Error('Order range must be 2%');
- if(!Number.isInteger(s.gap)||s.gap<1||s.gap>100)throw Error('Use at least one empty tick');
+ if(!Number.isInteger(s.gap)||s.gap<1||s.gap>100)throw Error('Use a spread of at least one tick');
  for(const key of ['buyStart','sellStart'])if(!Number.isFinite(s[key])||s[key]<0)throw Error('Starting prices must be zero or positive');
 }
 export function validate(s,ref){
@@ -22,13 +22,13 @@ export function validate(s,ref){
  if(ref/s.tick>1e12)throw Error('Tick size is too small');
  const round=n=>Number(n.toPrecision(12));
  const ceiling=round(Math.floor(ref/s.tick+1e-7)*s.tick),floor=round(Math.ceil(ref/s.tick-1e-7)*s.tick);
- let buy=s.buyStart||round(Math.floor(ref/s.tick+1e-7)*s.tick);
- let sell=s.sellStart||round(Math.max(Math.ceil(ref/s.tick-1e-7),Math.floor(ref/s.tick+1e-7)+s.gap+1)*s.tick);
+ let buy=s.buyStart||round((Math.ceil(ref/s.tick-1e-7)-s.gap)*s.tick);
+ let sell=s.sellStart||round(Math.ceil(ref/s.tick-1e-7)*s.tick);
  // DEX is a hard side boundary, not a second independent ±2% anchor.
  if(buy>ceiling+1e-15)throw Error('Buy start cannot be above the DEX price. Set it to 0 for automatic.');
  if(sell<floor-1e-15)throw Error('Sell start cannot be below the DEX price. Set it to 0 for automatic.');
  if(!(buy>0&&buy<sell))throw Error('Buy start must be below sell start');
- if((sell-buy)/s.tick<s.gap+1-1e-7)throw Error('Starting prices must leave the configured empty tick gap');
+ if((sell-buy)/s.tick<s.gap-1e-7)throw Error('Starting prices must respect the configured spread in ticks');
  for(const p of [buy,sell])if(Math.abs(p/s.tick-Math.round(p/s.tick))>1e-5)throw Error('Starting prices must align with tick size');
  return {buy,sell};
 }
@@ -41,8 +41,8 @@ export function planLadder(s,orders,ref,random=Math.random){
   // Count existing liquidity even if the opposite side has not been seeded yet.
   const eligible=o=>o.source!=='Depth'&&o.side===side&&(side==='buy'?o.price>=anchor*.98-1e-15&&o.price<anchor:o.price<=anchor*1.02+1e-15&&o.price>anchor);
   const current=all.filter(eligible).reduce((v,o)=>v+o.price*o.amount,0);
-  const lower=side==='buy'?anchor*.98:Math.max(ref,anchor+s.tick*(s.gap+1));
-  const upper=side==='sell'?anchor*1.02:Math.min(ref,anchor-s.tick*(s.gap+1));
+  const lower=side==='buy'?anchor*.98:Math.max(ref,anchor+s.tick*s.gap);
+  const upper=side==='sell'?anchor*1.02:Math.min(ref,anchor-s.tick*s.gap);
   const first=side==='buy'?Math.min(starts.buy,upper):Math.max(starts.sell,lower);
   const firstTick=side==='buy'?Math.floor(first/s.tick+1e-7):Math.ceil(first/s.tick-1e-7);
   const candidates=[];
@@ -109,10 +109,10 @@ export function plan(s,orders,ref,random=Math.random){
   const raw=side==='buy'?anchor*.98:anchor*1.02;
   const tick=side==='buy'?Math.ceil(raw/depthTick-1e-7):Math.floor(raw/depthTick+1e-7);
   const price=Number((tick*depthTick).toPrecision(12));
-  const valid=price>0&&(side==='buy'?price<=ref+1e-15&&price<=anchor-s.tick*(s.gap+1)+1e-15:price>=ref-1e-15&&price>=anchor+s.tick*(s.gap+1)-1e-15);
+  const valid=price>0&&(side==='buy'?price<=ref+1e-15&&price<=anchor-s.tick*s.gap+1e-15:price>=ref-1e-15&&price>=anchor+s.tick*s.gap-1e-15);
   const divisions=(side==='buy'?s.buyDivisions:s.sellDivisions)??1;
   const prices=Array.from({length:divisions},(_,i)=>Number(((tick+(side==='buy'?i:-i))*depthTick).toPrecision(12)));
-  const allValid=valid&&prices.every(p=>side==='buy'?p<=ref+1e-15&&p<=anchor-s.tick*(s.gap+1)+1e-15:p>=ref-1e-15&&p>=anchor+s.tick*(s.gap+1)-1e-15);
+  const allValid=valid&&prices.every(p=>side==='buy'?p<=ref+1e-15&&p<=anchor-s.tick*s.gap+1e-15:p>=ref-1e-15&&p>=anchor+s.tick*s.gap-1e-15);
   const existingWalls=all.filter(o=>o.source==='Depth'&&o.side===side&&o.price>0&&(side==='buy'?o.price>=anchor*.98-1e-15&&o.price<anchor:o.price<=anchor*1.02+1e-15&&o.price>anchor));
   const existingWallValue=existingWalls.reduce((sum,o)=>sum+o.price*o.amount,0);
   const budget=Math.max(0,target-(d[side]-existingWallValue));

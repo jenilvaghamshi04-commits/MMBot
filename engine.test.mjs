@@ -4,13 +4,13 @@ import {depth,planLadder as plan,validate} from './public/engine.js';
 const s={tick:.0000001,buyDepth:100,sellDepth:100,min:3,max:4,skip:5,interval:30,range:2,gap:1,buyStart:0,sellStart:0};
 const order=(side,price,value,source='Manual')=>({side,price,amount:value/price,source});
 test('depth uses opposite best price, excludes orders outside 2%',()=>{const d=depth([order('buy',.00002,10),order('buy',.000019,999),order('sell',.0000201,20),order('sell',.000021,999)]);assert.equal(d.buy,10);assert.equal(d.sell,20);});
-test('empty book generates bounded non-crossing orders with one empty tick',()=>{const p=plan(s,[],.00002,()=>.5);assert.ok(p.orders.length);for(const o of p.orders){assert.ok(o.price>=.0000196-1e-15&&o.price<=.0000204+1e-15);assert.ok(o.price*o.amount>=3-1e-8&&o.price*o.amount<=4+1e-8);}const d=depth(p.orders);assert.ok((d.ask-d.bid)/s.tick>=2-1e-7);assert.ok(d.buy<=100&&d.sell<=100);});
+test('empty book generates bounded non-crossing orders with one-tick spread',()=>{const p=plan(s,[],.00002,()=>.5);assert.ok(p.orders.length);for(const o of p.orders){assert.ok(o.price>=.0000196-1e-15&&o.price<=.0000204+1e-15);assert.ok(o.price*o.amount>=3-1e-8&&o.price*o.amount<=4+1e-8);}const d=depth(p.orders);assert.ok((d.ask-d.bid)/s.tick>=1-1e-7);assert.ok(d.buy<=100&&d.sell<=100);});
 test('repeated cycle never duplicates existing bot levels',()=>{const p=plan(s,[],.00002,()=>.5);assert.equal(plan(s,p.orders,.00002).orders.length,0);});
 test('skips existing five-dollar manual level',()=>{const existing=[order('buy',.0000199,5),order('sell',.0000201,5)];const p=plan(s,existing,.00002,()=>.5);assert.ok(p.orders.every(o=>!existing.some(e=>e.price===o.price)));});
 test('no additions when both depth targets already met',()=>{assert.equal(plan(s,[order('buy',.0000199,100),order('sell',.0000201,100)],.00002).orders.length,0);});
 test('rejects contradictory price example and absent reference',()=>{assert.throws(()=>validate({...s,sellStart:.000022,buyStart:.0000219},.00002));assert.throws(()=>plan(s,[],null));});
 test('remainder below order minimum is left unfilled',()=>{const p=plan({...s,buyDepth:2,sellDepth:2},[],.00002);assert.equal(p.orders.length,0);assert.equal(p.notes.length,2);});
-test('keeps existing manual orders and does not cross them',()=>{const manual=[order('sell',.0000199,5),order('buy',.0000197,5)];const p=plan(s,manual,.00002,()=>.5);for(const o of p.orders){if(o.side==='buy')assert.ok(o.price<=.0000197+1e-15);else assert.ok(o.price>=.0000199-1e-15);}assert.equal(manual.length,2);});
+test('keeps existing manual orders and does not cross them',()=>{const manual=[order('sell',.0000199,5),order('buy',.0000197,5)];const p=plan(s,manual,.00002,()=>.5);for(const o of p.orders){if(o.side==='buy')assert.ok(o.price<=.0000198+1e-15);else assert.ok(o.price>=.0000199-1e-15);}assert.equal(manual.length,2);});
 
 test('exact target reached despite random sizing when enough levels exist',()=>{const config={...s,tick:.000000001};for(const random of [()=>0,()=>.25,()=>.999]){const p=plan(config,[],.00002,random),d=depth(p.orders);assert.ok(Math.abs(d.buy-100)<1e-7);assert.ok(Math.abs(d.sell-100)<1e-7);for(const o of p.orders)assert.ok(o.price*o.amount>=3-1e-8&&o.price*o.amount<=4+1e-8);}});
 test('existing buys count toward target when sell side is initially absent',()=>{const config={...s,tick:.000000001};const existing=[order('buy',.000019999,90)];const result=plan(config,existing,.00002,()=>.5);assert.ok(Math.abs(depth([...existing,...result.orders]).buy-100)<1e-7);});
@@ -109,7 +109,16 @@ test('full depth target does not block missing normal quotes near DEX',()=>{
  assert.ok(Math.abs(depth(book).buy-500)<1e-7);
  const next=quoteCycle(config,book,reference,reference,reference,()=>.5);assert.ok(next.orders.some(o=>o.source==='Bot'&&o.side==='buy'&&Math.abs(o.price-bestBuy)<1e-15));const final=applyCycle(next);assert.ok(Math.abs(depth(final).buy-500)<1e-7);
 });
-test('default quotes use nearest legal DEX tick and preserve the configured gap',()=>{const result=validate(s,.00002132);assert.ok(Math.abs(result.buy-.0000213)<1e-15);assert.ok(result.sell-result.buy>=s.tick*(s.gap+1)-1e-15);assert.ok(result.sell>=.00002132);});
+test('default quotes use nearest legal DEX tick and preserve the configured gap',()=>{const result=validate(s,.00002132);assert.ok(Math.abs(result.buy-.0000213)<1e-15);assert.ok(result.sell-result.buy>=s.tick*s.gap-1e-15);assert.ok(result.sell>=.00002132);});
 test('obsolete depth wall is removed when normal and manual depth fill target',()=>{
  const config={...s,buyDepth:8,sellDepth:8};const manual=order('sell',.0000201,5);const wall=order('buy',.0000197,8,'Depth');const result=quoteCycle(config,[manual,wall],.00002,.00002,.00002,()=>.5);assert.ok(result.retained.includes(manual));assert.ok(result.cancelled.some(o=>o.source==='Depth'));const final=applyCycle(result);assert.ok(Math.abs(depth(final).buy-8)<1e-7);
+});
+import {matchPaperOrder} from './public/matching.js';
+test('exact requested DEX anchors: 0.0000220 -> bid 0.0000219 ask 0.0000220',()=>{
+ const config={...s,depthTick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};const result=quoteCycle(config,[],.000022,null,null,()=>.5);const d=depth(result.orders);assert.ok(Math.abs(d.bid-.0000219)<1e-15);assert.ok(Math.abs(d.ask-.000022)<1e-15);
+ const shifted=quoteCycle(config,result.orders,.0000221,.000022,.000022,()=>.5);const next=depth(shifted.orders);assert.equal(shifted.cancelled.length,result.orders.length);assert.ok(Math.abs(next.bid-.000022)<1e-15);assert.ok(Math.abs(next.ask-.0000221)<1e-15);assert.ok(!shifted.orders.some(o=>o.side==='sell'&&Math.abs(o.price-.000022)<1e-15));
+});
+test('fully consumed best ask and bid immediately have refill plans at DEX anchors',()=>{
+ const config={...s,depthTick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};const reference=.000022;const first=quoteCycle(config,[],reference,null,null,()=>.5).orders.map((o,i)=>({...o,id:String(i),time:1}));
+ for(const side of ['buy','sell']){const d=depth(first),price=side==='buy'?d.ask:d.bid;const maker=first.find(o=>o.side!==side&&o.price===price);const matched=matchPaperOrder(first,{id:'manual',side,price,amount:maker.amount,time:2,source:'Manual'});assert.equal(matched.remaining,0);assert.ok(!matched.orders.some(o=>o.id===maker.id));const refill=quoteCycle(config,matched.orders,reference,reference,reference,()=>.5);assert.ok(refill.orders.some(o=>o.side===maker.side&&Math.abs(o.price-price)<1e-15));const final=applyCycle(refill);const restored=depth(final);assert.ok(Math.abs(restored.bid-.0000219)<1e-15);assert.ok(Math.abs(restored.ask-.000022)<1e-15);for(const key of ['buy','sell'])assert.ok(Math.abs(restored[key]-500)<1e-7);}
 });

@@ -103,3 +103,16 @@ The normal-ladder budget now counts manual and normal liquidity separately from 
 Automatic starting prices now choose the nearest legal buy tick at or below DEX and a sell tick that preserves the configured empty gap. A manual paper fill while the bot is ON triggers an immediate refill cycle, rather than waiting for the next timer. Unchanged DEX quotes still run periodic refill cycles; changed DEX quotes cancel/rebuild as before. OFF disables refills. DEX price movement alone does not invent a trade: this feature places resting paper orders, while manual crossing orders generate simulated fills in Trade History.
 
 Regression tests cover normal-level refill when total depth already meets target, nearest legal starting ticks, and removal of obsolete Depth walls without affecting manual records.
+
+## Corrected adjacent-tick quoting
+
+The spread setting now measures the **price difference in normal ticks**, rather than the number of empty levels. Spread 1 means adjacent buy/sell prices. Automatic sell start = DEX rounded up to a normal tick; automatic buy start = sell start minus spread × normal tick. Thus normal tick 0.0000001 and spread 1 give:
+
+| DEX | Best automatic buy | Best automatic sell |
+| --- | --- | --- |
+| 0.0000220 | 0.0000219 | 0.0000220 |
+| 0.0000221 | 0.0000220 | 0.0000221 |
+
+This supersedes the earlier empty-tick gap formula. The same spread rule is used by normal and depth price guards. A fully consumed best normal order is eligible for immediate refill at its DEX-anchored price while ON. DEX changes cancel the prior bot/depth quotes and rebuild them using the new anchors. Quantities continue to use configured order values; depth totals and random divisions remain in force.
+
+On first load of this layout version, prior bot start overrides reset to automatic and spread resets to 1, matching the requested behavior. Existing normal/depth tick settings and manual records are retained. Bot quote reference is invalidated so the next ON cycle replaces the legacy layout; the bot does not start automatically. Existing opposite manual liquidity still participates in crossing/depth guards. Regression tests explicitly cover both table rows and consumption/refill of either best side.
