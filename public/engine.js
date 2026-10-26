@@ -20,30 +20,51 @@ export function validate(s,ref){
  return {buy,sell};
 }
 export function plan(s,orders,ref,random=Math.random){
- const starts=validate(s,ref),all=[...orders],added=[],notes=[];
- let d=depth(all),bid=d.bid??starts.buy,ask=d.ask??starts.sell;
- // Existing manual orders define the opposite-side anchor; planned starts seed an empty side.
+ const starts=validate(s,ref),all=[...orders],added=[],notes=[],capacity={};
  for(const side of ['buy','sell']){
   const target=side==='buy'?s.buyDepth:s.sellDepth;
-  let current=depth(all)[side];
   const updated=depth(all);
   const anchor=side==='buy'?(updated.ask??starts.sell):(updated.bid??starts.buy);
+  // Count existing liquidity even if the opposite side has not been seeded yet.
+  const eligible=o=>o.side===side&&(side==='buy'?o.price>=anchor*.98-1e-15&&o.price<anchor:o.price<=anchor*1.02+1e-15&&o.price>anchor);
+  const current=all.filter(eligible).reduce((v,o)=>v+o.price*o.amount,0);
   const lower=Math.max(ref*.98,side==='buy'?anchor*.98:anchor+s.tick*(s.gap+1));
   const upper=Math.min(ref*1.02,side==='sell'?anchor*1.02:anchor-s.tick*(s.gap+1));
   const first=side==='buy'?Math.min(starts.buy,upper):Math.max(starts.sell,lower);
   const firstTick=side==='buy'?Math.floor(first/s.tick+1e-7):Math.ceil(first/s.tick-1e-7);
-  let visited=0;
-  for(let i=0;i<2000&&current+1e-8<target;i++){
+  const candidates=[];
+  for(let i=0;i<2000;i++){
    const price=Number(((firstTick+(side==='buy'?-i:i))*s.tick).toPrecision(12));
-   if(price<lower-1e-15||price>upper+1e-15||price<=0)break;visited++;
+   if(price<lower-1e-15||price>upper+1e-15||price<=0)break;
    const at=all.filter(o=>Math.abs(o.price-price)<s.tick*.001);
-   // Never cross or duplicate another side; respect manual liquidity and our own existing level.
    if(at.some(o=>o.side!==side||o.source==='Bot')||at.reduce((v,o)=>v+o.price*o.amount,0)>=s.skip-1e-8)continue;
-   const remaining=target-current;if(remaining<s.min-1e-8)break;
-   const value=Math.min(s.min+random()*(s.max-s.min),remaining);
-   const order={side,price,amount:value/price,source:'Bot'};added.push(order);all.push(order);current+=value;
+   candidates.push(price);
   }
-  if(current+1e-8<target)notes.push(`${side}: ${current.toFixed(2)} / ${target.toFixed(2)} USDT; ${visited} levels checked. Target not fully reachable within range, gap and order limits.`);
+  const deficit=Math.max(0,target-current),slots=candidates.length;
+  capacity[side]={current,target,slots,maximum:current+slots*s.max,shortfall:Math.max(0,target-current-slots*s.max)};
+  // Select a feasible count first, then size each order so its remaining peers
+  // can still finish the target without going below min or above max.
+  const minimumCount=Math.ceil((deficit-1e-8)/s.max),maximumCount=Math.floor((deficit+1e-8)/s.min);
+  const exact=deficit>1e-8&&minimumCount<=slots&&minimumCount<=maximumCount;
+  const count=exact?minimumCount:Math.min(slots,maximumCount);
+  let remaining=exact?deficit:Math.min(deficit,count*s.max),placed=0;
+  for(let i=0;i<count;i++){
+   const left=count-i-1;
+   const low=Math.max(s.min,remaining-left*s.max),high=Math.min(s.max,remaining-left*s.min);
+   if(high<low-1e-8)break;
+   const value=low+Math.max(0,Math.min(1,random()))*Math.max(0,high-low);
+   const order={side,price:candidates[i],amount:value/candidates[i],source:'Bot'};
+   added.push(order);all.push(order);remaining-=value;placed+=value;
+  }
+  if(current+placed+1e-8<target)notes.push(`${side}: ${(current+placed).toFixed(2)} / ${target.toFixed(2)} USDT. ${slots} available levels × max $${s.max}. Use a smaller tick or higher maximum order value; any remainder below $${s.min} cannot be placed.`);
  }
- return {orders:added,notes};
+ return {orders:added,notes,capacity};
+}
+export function fitTick(s,orders,ref){
+ let candidate={...s,buyStart:0,sellStart:0};
+ for(let i=0;i<32;i++){
+  try{const result=plan(candidate,orders,ref,()=>.5);if(['buy','sell'].every(side=>result.capacity[side].shortfall<1e-8)&&result.notes.length===0)return candidate.tick;}catch{}
+  candidate.tick=Number((candidate.tick/2).toPrecision(12));
+ }
+ throw Error('Cannot fit both targets within the order limits. Check existing orders, starts and minimum order size.');
 }

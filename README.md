@@ -45,3 +45,7 @@ For live trading, the next step requires an identified exchange, authenticated s
 ## DEX pool and palette update
 
 Configured pool: https://dexscreener.com/ethereum/0xb37361ebebfe7e0f0d98300f0a8ae777daa1cc12. Click the cyan DEX badge to inspect it. The terminal palette follows the supplied BOOK_BOTS screenshot: black background, charcoal panel headers, bright green bids, red asks and cyan DEX highlights. No bot is started by this update. Tests include LF/WETH USD conversion, direct USDT quoting, missing prices, and pinned-token verification.
+
+## Depth target correction
+
+The planner now selects a feasible order count before sizing orders. When enough eligible levels exist and the target can be represented by the min/max order values, it reaches the exact remaining target rather than leaving a random small remainder. Existing same-side orders count even before the opposite side is seeded. The panel shows target progress and available capacity. Settings → Check depth targets reports eligible levels and maximum reachable total; Fit tick to targets proposes a finer tick and automatic starting prices, which apply only after Save and ON. A coarse tick cannot fit arbitrary dollar depth under a strict per-order maximum and one bot order per price. The helper preserves those limits instead of silently increasing order values. Regression tests cover exact targets and the fit helper.
