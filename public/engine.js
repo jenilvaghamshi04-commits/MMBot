@@ -59,11 +59,12 @@ export function planLadder(s,orders,ref,random=Math.random){
   // can still finish the target without going below min or above max.
   const minimumCount=Math.ceil((deficit-1e-8)/s.max),maximumCount=Math.floor((deficit+1e-8)/s.min);
   const exact=deficit>1e-8&&minimumCount<=slots&&minimumCount<=maximumCount;
-  const count=exact?minimumCount:Math.min(slots,maximumCount);
-  let remaining=exact?deficit:Math.min(deficit,count*s.max),placed=0;
+  const balancedCount=Math.ceil(deficit/((s.min+s.max)/2));
+  const count=exact?Math.min(slots,maximumCount,Math.max(minimumCount,balancedCount)):Math.min(slots,maximumCount);
+  let remaining=deficit,placed=0;
   for(let i=0;i<count;i++){
    const left=count-i-1;
-   const low=Math.max(s.min,remaining-left*s.max),high=Math.min(s.max,remaining-left*s.min);
+   const low=exact?Math.max(s.min,remaining-left*s.max):s.min,high=exact?Math.min(s.max,remaining-left*s.min):Math.min(s.max,remaining);
    if(high<low-1e-8)break;
    const value=low+Math.max(0,Math.min(1,random()))*Math.max(0,high-low);
    const order={side,price:candidates[i],amount:value/candidates[i],source:'Bot'};

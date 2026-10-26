@@ -116,3 +116,9 @@ The spread setting now measures the **price difference in normal ticks**, rather
 This supersedes the earlier empty-tick gap formula. The same spread rule is used by normal and depth price guards. A fully consumed best normal order is eligible for immediate refill at its DEX-anchored price while ON. DEX changes cancel the prior bot/depth quotes and rebuild them using the new anchors. Quantities continue to use configured order values; depth totals and random divisions remain in force.
 
 On first load of this layout version, prior bot start overrides reset to automatic and spread resets to 1, matching the requested behavior. Existing normal/depth tick settings and manual records are retained. Bot quote reference is invalidated so the next ON cycle replaces the legacy layout; the bot does not start automatically. Existing opposite manual liquidity still participates in crossing/depth guards. Regression tests explicitly cover both table rows and consumption/refill of either best side.
+
+## Normal order size randomization correction
+
+Normal ladder orders now use the configured Minimum small order and Maximum small order range without forcing every available level to the maximum. When there are too few ticks to fund the entire target with small orders, values are drawn independently inside the range and the remaining budget goes to the separate Depth split. When an exact normal allocation is feasible, a balanced order count avoids unnecessarily forcing every order to maximum size while retaining min/max feasibility.
+
+A versioned migration invalidates the prior quote reference once so existing fixed-size bot quotes are rebuilt on the next ON cycle, without starting the bot or changing manual orders. Tests cover coarse and fine normal ticks, varied values inside the configured range, and maintenance of the full target including Depth orders. If minimum equals maximum, fixed sizing is expected.

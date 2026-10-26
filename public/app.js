@@ -4,16 +4,17 @@ import {LF_POOL,referencePrice,freshReference} from './reference.js';
 const $=id=>document.getElementById(id);
 const newId=()=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const defaults={exchange:'',range:2,tick:.0000001,depthTick:.00000001,gap:1,buyStart:0,sellStart:0,buyDepth:100,sellDepth:100,buyDivisions:1,sellDivisions:1,min:3,max:4,skip:5,interval:30,chain:'ethereum',pool:LF_POOL};
-let s={...defaults},orders=[],running=false,timer,dexTimer,dexPrice=null,dexTime=0,generation=0,controller,side='buy',logs=[],editingId=null,quotedReference=null,startReference=null,trades=[],matchingVersion=0,quoteLayoutVersion=0;
-try{const loaded=JSON.parse(localStorage.getItem('lf.mm.v2')||'null');if(loaded){s={...defaults,...loaded.settings};orders=loaded.orders||[];quotedReference=loaded.quotedReference??null;startReference=loaded.startReference??null;trades=loaded.trades||[];matchingVersion=loaded.matchingVersion||0;quoteLayoutVersion=loaded.quoteLayoutVersion||0;}}catch{}
+let s={...defaults},orders=[],running=false,timer,dexTimer,dexPrice=null,dexTime=0,generation=0,controller,side='buy',logs=[],editingId=null,quotedReference=null,startReference=null,trades=[],matchingVersion=0,quoteLayoutVersion=0,normalSizingVersion=0;
+try{const loaded=JSON.parse(localStorage.getItem('lf.mm.v2')||'null');if(loaded){s={...defaults,...loaded.settings};orders=loaded.orders||[];quotedReference=loaded.quotedReference??null;startReference=loaded.startReference??null;trades=loaded.trades||[];matchingVersion=loaded.matchingVersion||0;quoteLayoutVersion=loaded.quoteLayoutVersion||0;normalSizingVersion=loaded.normalSizingVersion||0;}}catch{}
 // Apply the supplied pool to existing workspaces that had no DEX configuration.
 if(!s.chain&&!s.pool){s.chain='ethereum';s.pool=LF_POOL;}
 delete s.mode;delete s.manualRef;
 // Adopt the requested adjacent-tick quoting layout on the next active cycle.
 if(quoteLayoutVersion<2){s.gap=1;s.buyStart=0;s.sellStart=0;quotedReference=null;startReference=null;quoteLayoutVersion=2;}
+if(normalSizingVersion<1){quotedReference=null;normalSizingVersion=1;}
 const fmt=n=>Number(n).toLocaleString('en-US',{maximumSignificantDigits:10}),money=n=>Number(n).toFixed(2);
 const ref=()=>freshReference(dexPrice,dexTime,s.interval);
-function persist(){try{localStorage.setItem('lf.mm.v2',JSON.stringify({settings:s,orders,quotedReference,startReference,trades,matchingVersion,quoteLayoutVersion}));}catch{stop();toast('Unable to save. Bot stopped; browser storage unavailable.');}}
+function persist(){try{localStorage.setItem('lf.mm.v2',JSON.stringify({settings:s,orders,quotedReference,startReference,trades,matchingVersion,quoteLayoutVersion,normalSizingVersion}));}catch{stop();toast('Unable to save. Bot stopped; browser storage unavailable.');}}
 function toast(t){$('toast').textContent=t;$('toast').style.display='block';clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').style.display='none',5000);}
 function log(t){logs.unshift(`${new Date().toLocaleTimeString()} · ${t}`);logs=logs.slice(0,150);$('logs').replaceChildren(...logs.map(t=>{const d=document.createElement('div');d.textContent=t;return d;}));}
 function stop(){running=false;clearInterval(timer);$('toggle').textContent='Turn bot ON';$('toggle').className='on';$('status').textContent='● Bot OFF';$('botState').textContent='OFF';}
