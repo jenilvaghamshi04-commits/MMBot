@@ -168,3 +168,9 @@ Official references:
 The live page is now a focused single-column view based on the supplied manual-order panel: compact live controls, Real Manual Limit Order, **LF/USDT balance cards directly below the form**, then Bot Log. Market Trades is removed from the page and the Gate public market request no longer fetches trades. Public book snapshots are still read by the live strategy on the server; they are not displayed in this compact view.
 
 Balance cards show available funds, locked amounts and their sum for both LF and USDT. They are read from the connected Gate spot account on the existing refresh cycle. Disconnected or failed account reads show placeholders, not fabricated balances. My Open Exchange Orders and Algorithm Preview remain accessible in dialogs, preserving account visibility and pre-start review without expanding the main page. Demo page layout/behavior is unchanged by this compact-live update.
+
+## Live dashboard restored to demo-style layout
+
+The live page now uses the demo terminal's four-column dashboard: reference/public depth profile and bot controls; open Gate account orders with Bot Log tab; live Gate order book; manual order ticket with LF/USDT balance cards beneath. Market Trades remains absent. Open orders are visible inline instead of in a dialog; the balance-area account-orders button jumps to that panel. Algorithm preview, settings and credential connection retain their dialogs. Book rows can populate the manual price field without submitting an order.
+
+The public depth profile and displayed book use real Gate snapshots. Failed feed reads clear displayed market values and account errors clear unavailable private rows. Account controls, authorization, bot execution and demo behavior are unchanged. Browser QA verified the restored column layout and tab switching; the existing 62-test suite passes.
