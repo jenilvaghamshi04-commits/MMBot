@@ -55,6 +55,20 @@ test('changed division count removes old depth layout and preserves manual order
  const next=planWithDepth(changed,clean.orders,.00002132);for(const side of ['buy','sell'])assert.equal(next.orders.filter(o=>o.source==='Depth'&&o.side===side).length,3);
 });
 test('insufficient ticks does not collapse requested divisions or cross DEX',()=>{
- const result=planWithDepth({...s,buyDepth:500,sellDepth:500,buyDivisions:100,sellDivisions:100},[],.00002);assert.equal(result.orders.filter(o=>o.source==='Depth').length,0);assert.match(result.notes.join(' '),/fewer divisions or a smaller tick/);
+ const result=planWithDepth({...s,buyDepth:500,sellDepth:500,buyDivisions:100,sellDivisions:100},[],.00002);assert.equal(result.orders.filter(o=>o.source==='Depth').length,0);assert.match(result.notes.join(' '),/fewer divisions or a smaller depth tick size/);
  assert.throws(()=>validate({...s,buyDivisions:1.5},.00002));assert.throws(()=>validate({...s,sellDivisions:101},.00002));
 });
+test('fine depth tick fits five divisions while normal ladder retains coarse tick',()=>{
+ const config={...s,tick:1e-7,depthTick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};
+ const result=planWithDepth(config,[],.00002132,()=>.5);
+ for(const side of ['buy','sell']){const walls=result.orders.filter(o=>o.side===side&&o.source==='Depth');assert.equal(walls.length,5);for(let i=1;i<walls.length;i++)assert.ok(Math.abs(Math.abs(walls[i].price-walls[i-1].price)-1e-8)<1e-15);assert.ok(Math.abs(depth(result.orders)[side]-500)<1e-7);}
+ for(const o of result.orders.filter(o=>o.source==='Bot'))assert.ok(Math.abs(o.price/config.tick-Math.round(o.price/config.tick))<1e-7);
+ const coarse=planWithDepth({...config,depthTick:1e-7},[],.00002132,()=>.5);assert.deepEqual(coarse.orders.filter(o=>o.source==='Bot'),result.orders.filter(o=>o.source==='Bot'));
+ const clean=reconcileBotOrders(result.orders,.00002132,config.tick,config);assert.equal(clean.removed.length,0);assert.equal(planWithDepth(config,clean.orders,.00002132).orders.length,0);
+});
+test('changing only depth tick replaces depth layout and retains normal/manual orders',()=>{
+ const config={...s,tick:1e-7,depthTick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};const first=planWithDepth(config,[],.00002132).orders;const manual=order('buy',.0000211,5);const changed={...config,depthTick:5e-9};
+ const clean=reconcileBotOrders([...first,manual],.00002132,config.tick,changed);assert.ok(clean.orders.includes(manual));assert.ok(clean.orders.filter(o=>o.source==='Bot').length>0);assert.ok(clean.removed.every(o=>o.source==='Depth'));
+ const result=planWithDepth(changed,clean.orders,.00002132);for(const side of ['buy','sell']){const all=[...clean.orders,...result.orders].filter(o=>o.source==='Depth'&&o.side===side).sort((a,b)=>a.price-b.price);assert.equal(all.length,5);for(let i=1;i<5;i++)assert.ok(Math.abs(all[i].price-all[i-1].price-5e-9)<1e-15);}
+});
+test('rejects invalid depth tick independently of normal tick',()=>{for(const depthTick of [0,-1,NaN,Infinity])assert.throws(()=>validate({...s,depthTick},.00002));assert.doesNotThrow(()=>validate({...s,depthTick:1e-8},.00002));});

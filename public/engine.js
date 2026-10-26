@@ -8,6 +8,7 @@ export function depth(orders,range=2){
 export function validateConfig(s){
  for(const key of ['tick','buyDepth','sellDepth','min','max','skip','interval'])if(!Number.isFinite(s[key])||s[key]<=0)throw Error(`${key} must be positive`);
  for(const key of ['buyDivisions','sellDivisions'])if(s[key]!==undefined&&(!Number.isInteger(s[key])||s[key]<1||s[key]>100))throw Error('Depth divisions must be a whole number from 1 to 100');
+ if(s.depthTick!==undefined&&(!Number.isFinite(s.depthTick)||s.depthTick<=0))throw Error('Depth tick size must be positive');
  if(s.min>s.max)throw Error('Minimum order must not exceed maximum');
  if(s.interval<10)throw Error('Refresh must be at least 10 seconds');
  if(s.range!==2)throw Error('Order range must be 2%');
@@ -17,6 +18,7 @@ export function validateConfig(s){
 export function validate(s,ref){
  validateConfig(s);
  if(!Number.isFinite(ref)||ref<=0)throw Error('Fresh DEX reference unavailable');
+ if(ref/(s.depthTick??s.tick)>1e12)throw Error('Depth tick size is too small');
  if(ref/s.tick>1e12)throw Error('Tick size is too small');
  const round=n=>Number(n.toPrecision(12));
  const ceiling=round(Math.floor(ref/s.tick+1e-7)*s.tick),floor=round(Math.ceil(ref/s.tick-1e-7)*s.tick);
@@ -86,7 +88,7 @@ export function reconcileBotOrders(orders,ref,tick=null,settings=null){
  let kept=[...orders],removed=[];
  for(let i=0;i<=orders.length;i++){
   const d=depth(kept);
-  const shifted=o=>{if(o.source!=='Depth'||!tick)return false;const anchor=o.side==='buy'?d.ask:d.bid;if(anchor===null)return false;const raw=o.side==='buy'?anchor*.98:anchor*1.02;const count=settings?(o.side==='buy'?settings.buyDivisions:settings.sellDivisions)??1:(o.divisionCount??1);if((o.divisionCount??1)!==count)return true;const index=o.divisionIndex??0;if(index>=count)return true;const edge=((o.side==='buy'?Math.ceil(raw/tick-1e-7):Math.floor(raw/tick+1e-7))+(o.side==='buy'?index:-index))*tick;return Math.abs(o.price-edge)>tick*.001;};
+  const shifted=o=>{const spacing=settings?.depthTick??tick;if(o.source!=='Depth'||!spacing)return false;const anchor=o.side==='buy'?d.ask:d.bid;if(anchor===null)return false;const raw=o.side==='buy'?anchor*.98:anchor*1.02;const count=settings?(o.side==='buy'?settings.buyDivisions:settings.sellDivisions)??1:(o.divisionCount??1);if((o.divisionCount??1)!==count)return true;const index=o.divisionIndex??0;if(index>=count)return true;const edge=((o.side==='buy'?Math.ceil(raw/spacing-1e-7):Math.floor(raw/spacing+1e-7))+(o.side==='buy'?index:-index))*spacing;return Math.abs(o.price-edge)>spacing*.001;};
   const invalid=kept.filter(o=>['Bot','Depth'].includes(o.source)&&(shifted(o)||(o.side==='buy'?(o.price>ref+1e-15||(d.ask!==null&&(o.price<d.ask*.98-1e-15||o.price>=d.ask))):(o.price<ref-1e-15||(d.bid!==null&&(o.price>d.bid*1.02+1e-15||o.price<=d.bid))))));
   if(!invalid.length)break;
   const ids=new Set(invalid);removed.push(...invalid);kept=kept.filter(o=>!ids.has(o));
@@ -95,6 +97,7 @@ export function reconcileBotOrders(orders,ref,tick=null,settings=null){
 }
 
 export function plan(s,orders,ref,random=Math.random){
+ const depthTick=s.depthTick??s.tick;
  const ladder=planLadder(s,orders,ref,random),all=orders.map(o=>({...o}));
  all.push(...ladder.orders);
  const added=[...ladder.orders],updates=[],notes=[],boundary={};
@@ -104,22 +107,22 @@ export function plan(s,orders,ref,random=Math.random){
   if(anchor===null){boundary[side]={price:null,missing,status:'Waiting for an opposite first order'};if(missing>1e-8)notes.push(`${side}: waiting for an opposite first order.`);continue;}
   // Round inward so the depth wall stays inside the opposite-side 2% band.
   const raw=side==='buy'?anchor*.98:anchor*1.02;
-  const tick=side==='buy'?Math.ceil(raw/s.tick-1e-7):Math.floor(raw/s.tick+1e-7);
-  const price=Number((tick*s.tick).toPrecision(12));
+  const tick=side==='buy'?Math.ceil(raw/depthTick-1e-7):Math.floor(raw/depthTick+1e-7);
+  const price=Number((tick*depthTick).toPrecision(12));
   const valid=price>0&&(side==='buy'?price<=ref+1e-15&&price<=anchor-s.tick*(s.gap+1)+1e-15:price>=ref-1e-15&&price>=anchor+s.tick*(s.gap+1)-1e-15);
   const divisions=(side==='buy'?s.buyDivisions:s.sellDivisions)??1;
-  const prices=Array.from({length:divisions},(_,i)=>Number(((tick+(side==='buy'?i:-i))*s.tick).toPrecision(12)));
+  const prices=Array.from({length:divisions},(_,i)=>Number(((tick+(side==='buy'?i:-i))*depthTick).toPrecision(12)));
   const allValid=valid&&prices.every(p=>side==='buy'?p<=ref+1e-15&&p<=anchor-s.tick*(s.gap+1)+1e-15:p>=ref-1e-15&&p>=anchor+s.tick*(s.gap+1)-1e-15);
   const existingWalls=all.filter(o=>o.source==='Depth'&&o.side===side&&o.price>0&&(side==='buy'?o.price>=anchor*.98-1e-15&&o.price<anchor:o.price<=anchor*1.02+1e-15&&o.price>anchor));
   const existingWallValue=existingWalls.reduce((sum,o)=>sum+o.price*o.amount,0);
   const budget=Math.max(0,target-(d[side]-existingWallValue));
   boundary[side]={price,missing,divisions,perOrder:budget/divisions,prices,status:missing<1e-8?'Target reached':allValid?`Split depth into ${divisions} orders`:'Not enough valid ticks for all divisions'};
   if(budget<1e-8)continue;
-  if(!allValid){notes.push(`${side}: cannot fit ${divisions} depth divisions inside the 2% band, DEX limit and gap. Use fewer divisions or a smaller tick.`);continue;}
+  if(!allValid){notes.push(`${side}: cannot fit ${divisions} depth divisions inside the 2% band, DEX limit and gap. Use fewer divisions or a smaller depth tick size.`);continue;}
   // Divide the depth budget equally. Small ladder min/max and $5 skip do not apply.
   for(let i=0;i<divisions;i++){
    const p=prices[i],value=budget/divisions;
-   const existing=existingWalls.find(o=>Math.abs(o.price-p)<s.tick*.001);
+   const existing=existingWalls.find(o=>Math.abs(o.price-p)<depthTick*.001);
    if(existing){if(Math.abs(existing.price*existing.amount-value)>1e-8){existing.amount=value/p;updates.push({...existing,divisionIndex:i,divisionCount:divisions});}}
    else{const o={side,price:p,amount:value/p,source:'Depth',divisionIndex:i,divisionCount:divisions};all.push(o);added.push(o);}
   }
