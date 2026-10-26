@@ -5,18 +5,28 @@ export function depth(orders,range=2){
  const sell=bid===null?0:sells.filter(o=>o.price<=bid*(1+range/100)+1e-15&&o.price>bid).reduce((v,o)=>v+o.price*o.amount,0);
  return {bid,ask,buy,sell};
 }
-export function validate(s,ref){
+export function validateConfig(s){
  for(const key of ['tick','buyDepth','sellDepth','min','max','skip','interval'])if(!Number.isFinite(s[key])||s[key]<=0)throw Error(`${key} must be positive`);
- if(!Number.isFinite(ref)||ref<=0)throw Error('Reference price unavailable');
  if(s.min>s.max)throw Error('Minimum order must not exceed maximum');
  if(s.interval<10)throw Error('Refresh must be at least 10 seconds');
  if(s.range!==2)throw Error('Order range must be 2%');
  if(!Number.isInteger(s.gap)||s.gap<1||s.gap>100)throw Error('Use at least one empty tick');
+ for(const key of ['buyStart','sellStart'])if(!Number.isFinite(s[key])||s[key]<0)throw Error('Starting prices must be zero or positive');
+}
+export function validate(s,ref){
+ validateConfig(s);
+ if(!Number.isFinite(ref)||ref<=0)throw Error('Fresh DEX reference unavailable');
  if(ref/s.tick>1e12)throw Error('Tick size is too small');
- const c=Math.round(ref/s.tick),buy=s.buyStart||Number(((c-1)*s.tick).toPrecision(12)),sell=s.sellStart||Number(((c+s.gap)*s.tick).toPrecision(12));
+ const round=n=>Number(n.toPrecision(12));
+ const ceiling=round(Math.floor(ref/s.tick+1e-7)*s.tick),floor=round(Math.ceil(ref/s.tick-1e-7)*s.tick);
+ let buy=s.buyStart||round((Math.floor(ref/s.tick+1e-7)-1)*s.tick);
+ let sell=s.sellStart||round((Math.ceil(ref/s.tick-1e-7)+s.gap)*s.tick);
+ // DEX is a hard side boundary, not a second independent ±2% anchor.
+ if(buy>ceiling+1e-15)throw Error('Buy start cannot be above the DEX price. Set it to 0 for automatic.');
+ if(sell<floor-1e-15)throw Error('Sell start cannot be below the DEX price. Set it to 0 for automatic.');
  if(!(buy>0&&buy<sell))throw Error('Buy start must be below sell start');
  if((sell-buy)/s.tick<s.gap+1-1e-7)throw Error('Starting prices must leave the configured empty tick gap');
- for(const p of [buy,sell]){if(p<ref*.98-1e-15||p>ref*1.02+1e-15)throw Error('Starting prices must fall inside reference ±2%');if(Math.abs(p/s.tick-Math.round(p/s.tick))>1e-5)throw Error('Starting prices must align with tick size');}
+ for(const p of [buy,sell])if(Math.abs(p/s.tick-Math.round(p/s.tick))>1e-5)throw Error('Starting prices must align with tick size');
  return {buy,sell};
 }
 export function plan(s,orders,ref,random=Math.random){
@@ -28,8 +38,8 @@ export function plan(s,orders,ref,random=Math.random){
   // Count existing liquidity even if the opposite side has not been seeded yet.
   const eligible=o=>o.side===side&&(side==='buy'?o.price>=anchor*.98-1e-15&&o.price<anchor:o.price<=anchor*1.02+1e-15&&o.price>anchor);
   const current=all.filter(eligible).reduce((v,o)=>v+o.price*o.amount,0);
-  const lower=Math.max(ref*.98,side==='buy'?anchor*.98:anchor+s.tick*(s.gap+1));
-  const upper=Math.min(ref*1.02,side==='sell'?anchor*1.02:anchor-s.tick*(s.gap+1));
+  const lower=side==='buy'?anchor*.98:Math.max(ref,anchor+s.tick*(s.gap+1));
+  const upper=side==='sell'?anchor*1.02:Math.min(ref,anchor-s.tick*(s.gap+1));
   const first=side==='buy'?Math.min(starts.buy,upper):Math.max(starts.sell,lower);
   const firstTick=side==='buy'?Math.floor(first/s.tick+1e-7):Math.ceil(first/s.tick-1e-7);
   const candidates=[];
@@ -41,7 +51,7 @@ export function plan(s,orders,ref,random=Math.random){
    candidates.push(price);
   }
   const deficit=Math.max(0,target-current),slots=candidates.length;
-  capacity[side]={current,target,slots,maximum:current+slots*s.max,shortfall:Math.max(0,target-current-slots*s.max)};
+  capacity[side]={current,target,slots,lower,upper,maximum:current+slots*s.max,shortfall:Math.max(0,target-current-slots*s.max)};
   // Select a feasible count first, then size each order so its remaining peers
   // can still finish the target without going below min or above max.
   const minimumCount=Math.ceil((deficit-1e-8)/s.max),maximumCount=Math.floor((deficit+1e-8)/s.min);
@@ -56,7 +66,7 @@ export function plan(s,orders,ref,random=Math.random){
    const order={side,price:candidates[i],amount:value/candidates[i],source:'Bot'};
    added.push(order);all.push(order);remaining-=value;placed+=value;
   }
-  if(current+placed+1e-8<target)notes.push(`${side}: ${(current+placed).toFixed(2)} / ${target.toFixed(2)} USDT. ${slots} available levels × max $${s.max}. Use a smaller tick or higher maximum order value; any remainder below $${s.min} cannot be placed.`);
+  if(current+placed+1e-8<target)notes.push(`${side}: ${(current+placed).toFixed(2)} / ${target.toFixed(2)} USDT. ${lower>upper?'No valid range between the opposite order and DEX price. ':''}${slots} available levels × max $${s.max}. Use a smaller tick or higher maximum order value; any remainder below $${s.min} cannot be placed.`);
  }
  return {orders:added,notes,capacity};
 }
@@ -67,4 +77,16 @@ export function fitTick(s,orders,ref){
   candidate.tick=Number((candidate.tick/2).toPrecision(12));
  }
  throw Error('Cannot fit both targets within the order limits. Check existing orders, starts and minimum order size.');
+}
+
+// Only strategy-owned paper orders are removed. Manual records remain untouched.
+export function reconcileBotOrders(orders,ref){
+ if(!Number.isFinite(ref)||ref<=0)throw Error('Fresh DEX reference unavailable');
+ let kept=[...orders],removed=[];
+ for(let i=0;i<=orders.length;i++){
+  const d=depth(kept),invalid=kept.filter(o=>o.source==='Bot'&&(o.side==='buy'?(o.price>ref+1e-15||(d.ask!==null&&(o.price<d.ask*.98-1e-15||o.price>=d.ask))):(o.price<ref-1e-15||(d.bid!==null&&(o.price>d.bid*1.02+1e-15||o.price<=d.bid)))));
+  if(!invalid.length)break;
+  const ids=new Set(invalid);removed.push(...invalid);kept=kept.filter(o=>!ids.has(o));
+ }
+ return {orders:kept,removed};
 }

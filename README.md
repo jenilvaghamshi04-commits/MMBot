@@ -1,51 +1,46 @@
 # LF BOOK_BOTS terminal
 
-LF/USDT paper market-making workspace with a dark four-column layout: actual local depth profile, open orders/log, aggregated order book, and manual buy/sell ticket. Settings are in the top bar.
+Browser-local LF paper market-making workspace: depth profile, open orders/log, aggregated book, manual paper order entry and bot controls. No exchange account is connected and no real orders are placed. Runs only while the page is open; use one tab. State is stored under `lf.mm.v2` in localStorage. Page reload and settings save always stop the bot.
 
-## Run / Render
+## Run and deploy
 
-Node.js 22+; no dependencies or API keys required.
+Node.js 22+; no dependencies required. Run `npm start` and open http://localhost:3000. Render build command: `npm install`; start command: `npm start`; health check: `/api/health`. PORT is read from the environment. `render.yaml` supports creating a new service. Connected existing services deploy main only if auto-deploy is enabled.
 
-```sh
-npm start
-```
+## Live DEX reference
 
-Open http://localhost:3000. Render: build command `npm install`; start command `npm start`; health check `/api/health`. PORT is read from the environment. Pushes to main deploy only if your Render service is connected to this repository with auto-deploy enabled. A render.yaml blueprint is included for a new service; existing services retain their dashboard configuration.
+Preconfigured Ethereum Uniswap LF/WETH pool:
+https://dexscreener.com/ethereum/0xb37361ebebfe7e0f0d98300f0a8ae777daa1cc12
 
-## Execution scope
+LF base contract: `0x957c7fa189a408e78543113412f6ae1a9b4022c4`.
 
-**All orders are paper records in this browser. No exchange API/account is connected.** Runs only while this tab is open. No balances, real fills, or volume bot are simulated. Never enter API secrets in the source. Refresh always starts OFF. Same-origin tabs are not a shared execution engine; use one tab for paper operation. State is saved under `lf.mm.v2` in localStorage; the previous demo workspace is intentionally not imported. A fresh workspace has no orders and no fabricated book levels. Existing v2 orders persist across reloads.
+The DEX Screener API supplies `priceUsd` for LF/WETH. The interface labels the USD reference and the assumption 1 USDT = $1. Direct LF/USDT pools use `priceNative`. The supplied pool validates the LF base contract. DEX data is provider-indexed, not a direct executable chain quote. Displayed timestamp is fetch time. API: https://docs.dexscreener.com/api/reference
 
-## Settings and algorithm
+Manual reference has been removed; saved legacy manual-mode settings are ignored. The current fresh price remains available during pending refreshes, fixing a race where a bot cycle could stop during each DEX refresh. Failed requests clear the reference and stop execution. Stale/missing quotes cannot generate orders. Freshness is limited to max(60 seconds, twice the refresh interval). Changing the pool clears the old reference.
 
-- Reference: manual USDT price or a verified LF-base DEX pool. The supplied Ethereum Uniswap LF/WETH pool `0xb37361ebebfe7e0f0d98300f0a8ae777daa1cc12` is preconfigured and selected by default. Previously unconfigured workspaces migrate to this feed; existing custom pool settings are retained. For LF/WETH, the app uses DEX Screener `priceUsd` and clearly labels the USD reference and the assumption 1 USDT = $1. Direct LF/USDT pools use `priceNative`. The supplied pool also validates the LF base contract `0x957c7fa189a408e78543113412f6ae1a9b4022c4`. API: https://docs.dexscreener.com/api/reference
-- Fill range: reference −2% to reference +2%, intersected with the depth ranges below.
-- Sell depth: total USDT of sells above the highest buy and at or below highest buy × 1.02.
-- Buy depth: total USDT of buys below the lowest sell and at or above lowest sell × 0.98.
-- Manual and bot orders both count toward each depth target. An absent opposite side uses the configured/planned opposite starting price to seed generation; measured depth shows zero until an actual opposite order exists.
-- Tick size defines the price ladder. Buy start walks down; sell start walks up. Zero starts select automatic values around the reference.
-- Gap is the number of **empty tick levels** between the nearest buy and sell. One empty level requires best sell − best buy ≥ 2 × tick. A sell at 0.0000220 with a buy at 0.0000219 has zero empty levels when tick = 0.0000001; for one empty level use buy ≤ 0.0000218.
-- Each generated order uses a random value between minimum and maximum USDT; a final order can be reduced to the remaining target only if it remains at least the minimum. A remainder below minimum stays unfilled.
-- A price is skipped if existing total value there is at least the configured threshold (default $5), if a bot order already exists there, or if it would overlap/cross the other side. Manual orders below the threshold can receive one bot addition.
-- The bot does not cancel/reprice existing orders automatically. It adds eligible missing levels up to the targets. No duplicate bot orders per price. If too few eligible levels exist, it reports the shortfall in Bot Log rather than putting orders outside the range or exceeding size limits.
-- Each side is limited to 2,000 examined levels per cycle. Reference changes never cause an order outside current bounds to be automatically removed.
-- ON runs a cycle immediately, then every configured interval (minimum 10 seconds). OFF stops new bot orders and retains existing orders. Save settings stops the bot. Bulk cancellation stops it too, so cancelled orders are not immediately replaced.
-- A missing, failing, or stale DEX reference stops the bot in DEX mode. Price data is provider-indexed, not a direct executable chain quote. Timestamp is fetch time.
+## Order rules
 
-### Price example
+- **Buy depth:** sum buy USDT notionals from lowest sell × 0.98 up to (but excluding) the lowest sell.
+- **Sell depth:** sum sell USDT notionals above the highest buy through highest buy × 1.02.
+- **Buy generation:** prices must be at least lowest sell × 0.98 and at most the DEX price, while respecting the empty-tick gap below the lowest sell.
+- **Sell generation:** prices must be at least the DEX price and at most highest buy × 1.02, while respecting the empty-tick gap above the highest buy.
+- DEX is the buy ceiling and sell floor. There is no independent DEX ±2% intersection; the opposite first order defines the 2% depth band.
+- If no opposite order exists, configured/automatic opposite starts seed the first cycle. Measured depth needs actual orders on both sides. Automatic starts straddle DEX and leave the configured empty tick gap.
+- One empty tick requires best sell − best buy ≥ 2 × tick. Starting prices of 0 are automatic. Explicit buy starts above DEX or sell starts below DEX are rejected with an actionable message.
+- Existing manual and bot orders count toward targets. Each eligible price receives at most one bot order. Prices with existing total value ≥ the skip threshold (default $5) are skipped; smaller manual levels may receive one bot addition.
+- Orders obey minimum/maximum USDT value. A feasible count is chosen before sizing, allowing exact targets whenever eligible levels and min/max constraints permit. A remainder smaller than minimum stays unfilled.
+- Each side examines at most 2,000 price levels per cycle. The capacity summary explains shortages and disjoint DEX/depth bands. Check depth targets and Fit tick to targets are at the top of Settings. The latter proposes a smaller tick and automatic starts; Save and ON are required to apply.
+- ON runs a cycle immediately and then at the configured interval (minimum 10 seconds). Each active cycle first removes bot-owned orders outside the current DEX side limits or opposite-order 2% bands, then fills missing depth. Manual orders are not automatically cancelled. OFF, settings save, and bulk cancellation stop generation. OFF does not cancel existing orders.
+- No automatic fills, balances, external order-book liquidity, or volume bot are simulated. To place exchange orders, a separate secure authenticated server-side exchange integration and durable worker are required.
 
-At reference **0.0000200**, the 2% range is **0.0000196–0.0000204**. Prices 0.0000219 and 0.0000220 are outside this band and will be rejected as starting prices. To use those levels, select a suitable reference; all configured starts must still satisfy the gap and tick rules.
+## Example
 
-## Validation
+DEX = 0.0000200, lowest sell = 0.0000201, highest buy = 0.0000199:
 
-`npm test` covers opposite-side depth anchors, 2% bounds, gap, size constraints, duplicate prevention, $5 skip, completed targets, sub-minimum remainders, non-crossing behavior, and HTTP routes. `node --check public/app.js` checks browser script syntax.
+- Buy depth band begins at 0.000019698; new buys cannot exceed DEX 0.0000200 or violate the gap to the first sell.
+- Sell depth band ends at 0.000020298; new sells cannot fall below DEX 0.0000200 or violate the gap to the first buy.
 
-For live trading, the next step requires an identified exchange, authenticated server-side execution, secure environment-managed API keys, current public/private order-book reconciliation, balance/precision/minimum checks, stale-price handling, and a durable single-worker lifecycle. The browser paper toggle does not place real exchange orders.
+The min/max values and tick size still limit reachable depth. The bot reports capacity rather than exceeding the boundaries.
 
-## DEX pool and palette update
+## Checks
 
-Configured pool: https://dexscreener.com/ethereum/0xb37361ebebfe7e0f0d98300f0a8ae777daa1cc12. Click the cyan DEX badge to inspect it. The terminal palette follows the supplied BOOK_BOTS screenshot: black background, charcoal panel headers, bright green bids, red asks and cyan DEX highlights. No bot is started by this update. Tests include LF/WETH USD conversion, direct USDT quoting, missing prices, and pinned-token verification.
-
-## Depth target correction
-
-The planner now selects a feasible order count before sizing orders. When enough eligible levels exist and the target can be represented by the min/max order values, it reaches the exact remaining target rather than leaving a random small remainder. Existing same-side orders count even before the opposite side is seeded. The panel shows target progress and available capacity. Settings → Check depth targets reports eligible levels and maximum reachable total; Fit tick to targets proposes a finer tick and automatic starting prices, which apply only after Save and ON. A coarse tick cannot fit arbitrary dollar depth under a strict per-order maximum and one bot order per price. The helper preserves those limits instead of silently increasing order values. Regression tests cover exact targets and the fit helper.
+`npm test` covers depth anchors, exact targets, empty-side counting, DEX limits, non-overlapping bands, stale reference protection, repricing cleanup, gap, order sizes, duplicate prevention, $5 skip, tick fitting, token/quote validation and HTTP routes. `node --check public/app.js` checks browser script syntax.

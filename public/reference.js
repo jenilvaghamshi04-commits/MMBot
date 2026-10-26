@@ -8,3 +8,7 @@ export function referencePrice(data,chain,pool){
  if(!Number.isFinite(price)||price<=0)throw Error('Pool reference price unavailable');
  return {price,unit:direct?'USDT':'USD',approximate:!direct,pair:`LF/${data.quote?.symbol||'unknown'}`};
 }
+
+export function freshReference(price,fetchedAt,interval,now=Date.now()){
+ return Number.isFinite(price)&&price>0&&fetchedAt>0&&now-fetchedAt<=Math.max(60000,interval*2000)?price:null;
+}
