@@ -41,7 +41,7 @@ test('boundary depth ignores occupied $5 level and does not duplicate on next cy
 test('boundary wall never violates DEX cap when no valid range exists',()=>{
  const result=planWithDepth(s,[order('sell',.000021,5)],.00002);for(const o of result.orders)assert.ok(o.side==='buy'?o.price<=.00002:o.price>=.00002);
 });
-test('five divisions split remaining depth equally at distinct consecutive ticks',()=>{
+test('five divisions with identical random draws retain totals and distinct ticks',()=>{
  const config={...s,tick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};
  const result=planWithDepth(config,[],.00002132,()=>.5);
  for(const side of ['buy','sell']){const walls=result.orders.filter(o=>o.source==='Depth'&&o.side===side);assert.equal(walls.length,5);const value=walls[0].price*walls[0].amount;for(let i=0;i<5;i++){assert.ok(Math.abs(walls[i].price*walls[i].amount-value)<1e-7);assert.equal(walls[i].divisionIndex,i);if(i)assert.ok(Math.abs(Math.abs(walls[i].price-walls[i-1].price)-config.tick)<1e-15);assert.ok(side==='buy'?walls[i].price<=.00002132:walls[i].price>=.00002132);}assert.ok(Math.abs(depth(result.orders)[side]-500)<1e-7);}
@@ -72,3 +72,18 @@ test('changing only depth tick replaces depth layout and retains normal/manual o
  const result=planWithDepth(changed,clean.orders,.00002132);for(const side of ['buy','sell']){const all=[...clean.orders,...result.orders].filter(o=>o.source==='Depth'&&o.side===side).sort((a,b)=>a.price-b.price);assert.equal(all.length,5);for(let i=1;i<5;i++)assert.ok(Math.abs(all[i].price-all[i-1].price-5e-9)<1e-15);}
 });
 test('rejects invalid depth tick independently of normal tick',()=>{for(const depthTick of [0,-1,NaN,Infinity])assert.throws(()=>validate({...s,depthTick},.00002));assert.doesNotThrow(()=>validate({...s,depthTick:1e-8},.00002));});
+test('random depth amounts differ while respecting exact depth total and division count',()=>{
+ const config={...s,tick:1e-7,depthTick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};let i=0;const random=()=>[.05,.25,.5,.75,.95][i++%5];
+ const result=planWithDepth(config,[],.00002132,random);
+ for(const side of ['buy','sell']){const walls=result.orders.filter(o=>o.source==='Depth'&&o.side===side);assert.equal(walls.length,5);const values=walls.map(o=>o.amount*o.price);assert.ok(new Set(values.map(v=>v.toFixed(2))).size>1);assert.ok(values.every(v=>v>0));assert.ok(Math.abs(depth(result.orders)[side]-500)<1e-7);}
+ const repeated=planWithDepth(config,result.orders,.00002132,()=>.99);assert.equal(repeated.updates.length,0);assert.equal(repeated.orders.length,0);
+});
+test('legacy equal walls randomize once and retain weights after update',()=>{
+ const config={...s,tick:1e-7,depthTick:1e-8,buyDepth:500,sellDepth:500,buyDivisions:5,sellDivisions:5};const first=planWithDepth(config,[],.00002132,()=>.5).orders.map((o,i)=>({...o,id:String(i)}));for(const o of first)delete o.depthWeight;
+ let i=0;const next=planWithDepth(config,first,.00002132,()=>[.1,.3,.6,.7,.9][i++%5]);assert.equal(next.updates.length,10);const merged=first.map(o=>next.updates.find(u=>u.id===o.id)||o);
+ const stable=planWithDepth(config,merged,.00002132,()=>0);assert.equal(stable.updates.length,0);for(const side of ['buy','sell'])assert.ok(Math.abs(depth(merged)[side]-500)<1e-7);
+ const changed=planWithDepth({...config,buyDepth:600,sellDepth:600},merged,.00002132,()=>0);const resized=merged.map(o=>changed.updates.find(u=>u.id===o.id)||o);for(const side of ['buy','sell'])assert.ok(Math.abs(depth(resized)[side]-600)<1e-7);
+});
+test('small random split budgets never create zero-size depth orders',()=>{
+ const config={...s,tick:1e-8,depthTick:1e-10,buyDepth:1,sellDepth:1,buyDivisions:100,sellDivisions:100};let i=0;const result=planWithDepth(config,[order('buy',.00001999,.001),order('sell',.00002001,.001)],.00002,()=>i++%2?0:1);for(const o of result.orders)assert.ok(o.amount>0);assert.equal(result.orders.filter(o=>o.source==='Depth').length,200);for(const side of ['buy','sell'])assert.ok(Math.abs(depth([...result.orders,order('buy',.00001999,.001),order('sell',.00002001,.001)])[side]-1)<1e-7);
+});

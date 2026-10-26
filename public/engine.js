@@ -119,12 +119,23 @@ export function plan(s,orders,ref,random=Math.random){
   boundary[side]={price,missing,divisions,perOrder:budget/divisions,prices,status:missing<1e-8?'Target reached':allValid?`Split depth into ${divisions} orders`:'Not enough valid ticks for all divisions'};
   if(budget<1e-8)continue;
   if(!allValid){notes.push(`${side}: cannot fit ${divisions} depth divisions inside the 2% band, DEX limit and gap. Use fewer divisions or a smaller depth tick size.`);continue;}
-  // Divide the depth budget equally. Small ladder min/max and $5 skip do not apply.
+  // Retain weights for an existing split so polling does not continually resize it.
+  // Missing/legacy weights are randomized once; totals always equal the budget.
+  const matched=prices.map(p=>existingWalls.find(o=>Math.abs(o.price-p)<depthTick*.001));
+  const reuse=matched.every(o=>Number.isFinite(o?.depthWeight)&&o.depthWeight>0);
+  const weights=reuse?matched.map(o=>o.depthWeight):prices.map(()=>{const draw=random();return .5+Math.max(0,Math.min(1,Number.isFinite(draw)?draw:.5));});
+  const weightTotal=weights.reduce((sum,w)=>sum+w,0);
+  const roundCents=budget*Math.min(...weights)/weightTotal>=.01;
+  let assigned=0;
+  const allocations=weights.map((weight,i)=>{let value=i===divisions-1?budget-assigned:budget*weight/weightTotal;if(roundCents&&i<divisions-1)value=Math.floor((value+1e-10)*100)/100;assigned+=value;return value;});
+  boundary[side].allocations=allocations;
+  boundary[side].status=missing<1e-8?'Target reached · random split retained':`Split depth into ${divisions} random-sized orders`;
+  // Small ladder min/max and $5 skip do not apply to these depth allocations.
   for(let i=0;i<divisions;i++){
-   const p=prices[i],value=budget/divisions;
+   const p=prices[i],value=allocations[i];
    const existing=existingWalls.find(o=>Math.abs(o.price-p)<depthTick*.001);
-   if(existing){if(Math.abs(existing.price*existing.amount-value)>1e-8){existing.amount=value/p;updates.push({...existing,divisionIndex:i,divisionCount:divisions});}}
-   else{const o={side,price:p,amount:value/p,source:'Depth',divisionIndex:i,divisionCount:divisions};all.push(o);added.push(o);}
+   if(existing){if(!reuse||Math.abs(existing.price*existing.amount-value)>1e-8){existing.amount=value/p;updates.push({...existing,divisionIndex:i,divisionCount:divisions,depthWeight:weights[i]});}}
+   else{const o={side,price:p,amount:value/p,source:'Depth',divisionIndex:i,divisionCount:divisions,depthWeight:weights[i]};all.push(o);added.push(o);}
   }
  }
  return {...ladder,orders:added,updates,notes,boundary};
