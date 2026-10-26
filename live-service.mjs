@@ -1,3 +1,4 @@
+import {fetchDexReference} from './dex-feed.mjs';
 import {randomBytes,timingSafeEqual} from 'node:crypto';
 import {GateClient,PAIR,exchangeOrder,marketOrders} from './gate.mjs';
 import {quoteCycle,validateConfig} from './public/engine.js';
@@ -11,7 +12,7 @@ export class LiveService{
  async market(){if(this.marketCache&&Date.now()-this.marketCache.fetchedAt<2000)return this.marketCache;this.marketCache=await this.publicClient.market();return this.marketCache;}
  async connect(key,secret){if(this.running||this.busy||this.starting)throw Error('Stop the live bot before changing credentials.');if(!key||!secret||key.length>512||secret.length>512)throw Error('Enter valid API credentials.');const client=new GateClient(key,secret);await client.accounts();this.client=client;this.metadata.clear();this.quoted=null;this.log('Gate spot account connected. Bot OFF.');return this.account();}
  async account(){if(!this.client)throw Error('Connect Gate API credentials first.');const [balances,orders]=await Promise.all([this.client.accounts(),this.client.orders()]);return {balances:balances.filter(b=>['LF','USDT'].includes(b.currency)),orders:orders.map(o=>({id:String(o.id),side:o.side,price:o.price,amount:o.amount,left:o.left,text:o.text,source:String(o.text||'').startsWith(this.prefix)?'Bot':'Manual / external'})),...this.status()};}
- async dex(){const response=await fetch(`https://api.dexscreener.com/latest/dex/pairs/ethereum/${LF_POOL}`,{signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('DEX reference unavailable.');const data=await response.json(),pair=data.pairs?.find(p=>p.pairAddress.toLowerCase()===LF_POOL);if(!pair)throw Error('LF pool unavailable.');return referencePrice({base:pair.baseToken,quote:pair.quoteToken,priceNative:pair.priceNative,priceUsd:pair.priceUsd},'ethereum',LF_POOL).price;}
+ async dex(){return referencePrice(await fetchDexReference('ethereum',LF_POOL),'ethereum',LF_POOL).price;}
  async preview(settings){validateConfig(settings);const [market,reference,open]=await Promise.all([this.market(),this.dex(),this.client?this.client.orders():[]]);if(market.pair.trade_status!=='tradable')throw Error('LF/USDT is not currently tradable.');
   for(const tick of [settings.tick,settings.depthTick]){const exchangeTick=10**-Number(market.pair.precision);if(tick<exchangeTick-1e-15||Math.abs(tick/exchangeTick-Math.round(tick/exchangeTick))>1e-6)throw Error(`Gate ticks must be integer multiples of ${exchangeTick}.`);}
   const normalized=marketOrders(market.book,open,this.metadata,this.prefix);
