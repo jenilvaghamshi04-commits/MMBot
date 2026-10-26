@@ -44,3 +44,11 @@ The min/max values and tick size still limit reachable depth. The bot reports ca
 ## Checks
 
 `npm test` covers depth anchors, exact targets, empty-side counting, DEX limits, non-overlapping bands, stale reference protection, repricing cleanup, gap, order sizes, duplicate prevention, $5 skip, tick fitting, token/quote validation and HTTP routes. `node --check public/app.js` checks browser script syntax.
+
+## Separate outer-boundary depth orders
+
+Depth shortfalls now use a separate **Depth** order at the outer 2% boundary, after accounting for existing orders and any new small ladder orders. Buy wall = lowest sell × 0.98, rounded up to the tick. Sell wall = highest buy × 1.02, rounded down to the tick. This keeps walls inside the 2% band. Buys remain ≤ DEX, sells ≥ DEX, and the empty-tick gap is enforced.
+
+The small-order minimum, maximum, occupied-price skip and available ladder capacity do **not** cap the separate depth wall. Thus current buy depth $12.47 with a $500 target can receive a $487.53 Depth top-up at the boundary. A wall can share a level with a manual or small ladder order. Repeated cycles do not duplicate a completed wall; increased targets update the existing wall at the same boundary. Invalid or shifted bot-owned walls are removed and regenerated on active cycles. Cancel Bot includes both Bot and Depth sources; Cancel Manual preserves them. This supersedes the earlier small-order-only capacity limitation for depth targets.
+
+The UI now previews missing depth and boundary prices instead of claiming that lack of eligible ladder slots prevents placing depth. Fit small-order tick is optional for the ladder; it is not needed to increase wall size. All execution remains browser-local paper trading.
