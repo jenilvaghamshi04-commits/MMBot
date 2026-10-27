@@ -5,7 +5,7 @@ const live=new LiveService();
 async function body(req){let data='';for await(const part of req){data+=part;if(data.length>16384)throw Error('Request too large.');}return JSON.parse(data||'{}');}
 function json(res,data,status=200){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
 import {readFile} from 'node:fs/promises';
-const files={'/live':['live.html','text/html'],'/live/':['live.html','text/html'],'/live.js':['live.js','text/javascript'],'/live.css':['live.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml'],'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/engine.js':['engine.js','text/javascript'],'/reference.js':['reference.js','text/javascript'],'/matching.js':['matching.js','text/javascript'],'/style.css':['style.css','text/css']};
+const files={'/live':['live.html','text/html'],'/live/':['live.html','text/html'],'/live.js':['live.js','text/javascript'],'/live.css':['live.css','text/css'],'/favicon.svg':['favicon.svg','image/svg+xml'],'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/engine.js':['engine.js','text/javascript'],'/reference.js':['reference.js','text/javascript'],'/matching.js':['matching.js','text/javascript'],'/risk.js':['risk.js','text/javascript'],'/performance.js':['performance.js','text/javascript'],'/performance-ui.js':['performance-ui.js','text/javascript'],'/style.css':['style.css','text/css']};
 http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');
  res.setHeader('X-Content-Type-Options','nosniff');
@@ -19,6 +19,7 @@ http.createServer(async(req,res)=>{
    try{
     if(req.method==='GET'&&url.pathname==='/api/live/status')return json(res,live.status());
     if(req.method==='GET'&&url.pathname==='/api/live/account')return json(res,await live.account());
+    if(req.method==='GET'&&url.pathname==='/api/live/performance')return json(res,{fills:await live.performance(Number(url.searchParams.get('hours')),url.searchParams.get('scope'))});
     if(req.method!=='POST')return json(res,{error:'Method not allowed.'},405);
     if(!String(req.headers['content-type']).includes('application/json'))return json(res,{error:'JSON required.'},400);
     const input=await body(req);

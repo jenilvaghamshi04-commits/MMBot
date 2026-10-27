@@ -12,6 +12,7 @@ export class GateClient{
  }
  async market(){const [book,tickers,pair]=await Promise.all([this.request('GET','/spot/order_book',{currency_pair:PAIR,limit:'100',with_id:'true'}),this.request('GET','/spot/tickers',{currency_pair:PAIR}),this.request('GET',`/spot/currency_pairs/${PAIR}`)]);return {book,ticker:tickers[0],pair,fetchedAt:Date.now()};}
  async orders(){let result=[];for(let page=1;page<=10;page++){const rows=await this.request('GET','/spot/orders',{currency_pair:PAIR,status:'open',limit:'100',page:String(page)},null,true);result.push(...rows);if(rows.length<100)return result;}throw Error('Too many open orders to reconcile completely.');}
+ async trades(from,to){let result=[];for(let page=1;page<=20;page++){const rows=await this.request('GET','/spot/my_trades',{currency_pair:PAIR,from:String(from),to:String(to),limit:'1000',page:String(page)},null,true);result.push(...rows);if(rows.length<1000)return result;}throw Error('Too many fills to load completely. Choose a shorter period.');}
  accounts(){return this.request('GET','/spot/accounts',{},null,true);}
  create(order){return this.request('POST','/spot/orders',{},order,true);}
  cancel(id){return this.request('DELETE',`/spot/orders/${encodeURIComponent(id)}`,{currency_pair:PAIR},null,true);}

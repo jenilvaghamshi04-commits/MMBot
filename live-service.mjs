@@ -1,10 +1,11 @@
+import {PriceJumpGuard,validateJumpSettings} from './public/risk.js';
 import {fetchDexReference} from './dex-feed.mjs';
 import {randomBytes,timingSafeEqual} from 'node:crypto';
 import {GateClient,PAIR,exchangeOrder,marketOrders} from './gate.mjs';
 import {quoteCycle,validateConfig} from './public/engine.js';
 import {LF_POOL,referencePrice} from './public/reference.js';
 export class LiveService{
- constructor(client=new GateClient()){this.publicClient=client;this.client=null;this.running=false;this.busy=false;this.starting=false;this.stopping=false;this.timer=null;this.settings=null;this.quoted=null;this.startRef=null;this.metadata=new Map();this.logs=[];this.lastCycle=null;this.lastError=null;this.marketCache=null;this.tag=process.env.GATE_BOT_TAG||'lfmm';if(!/^[a-zA-Z0-9_-]{1,10}$/.test(this.tag))throw Error('GATE_BOT_TAG must be 1-10 safe characters.');this.prefix=`t-${this.tag}-`;}
+ constructor(client=new GateClient()){this.publicClient=client;this.client=null;this.running=false;this.busy=false;this.starting=false;this.stopping=false;this.timer=null;this.settings=null;this.quoted=null;this.startRef=null;this.metadata=new Map();this.logs=[];this.lastCycle=null;this.lastError=null;this.marketCache=null;this.jumpGuard=new PriceJumpGuard();this.tag=process.env.GATE_BOT_TAG||'lfmm';if(!/^[a-zA-Z0-9_-]{1,10}$/.test(this.tag))throw Error('GATE_BOT_TAG must be 1-10 safe characters.');this.prefix=`t-${this.tag}-`;}
  log(message){this.logs.unshift({time:Date.now(),message});this.logs=this.logs.slice(0,100);}
  enabled(){return process.env.LIVE_TRADING_ENABLED==='true';}
  authorized(token){const expected=process.env.LIVE_ADMIN_TOKEN||'';if(expected.length<16||typeof token!=='string')return false;const a=Buffer.from(token),b=Buffer.from(expected);return a.length===b.length&&timingSafeEqual(a,b);}
@@ -12,8 +13,9 @@ export class LiveService{
  async market(){if(this.marketCache&&Date.now()-this.marketCache.fetchedAt<2000)return this.marketCache;this.marketCache=await this.publicClient.market();return this.marketCache;}
  async connect(key,secret){if(this.running||this.busy||this.starting)throw Error('Stop the live bot before changing credentials.');if(!key||!secret||key.length>512||secret.length>512)throw Error('Enter valid API credentials.');const client=new GateClient(key,secret);await client.accounts();this.client=client;this.metadata.clear();this.quoted=null;this.log('Gate spot account connected. Bot OFF.');return this.account();}
  async account(){if(!this.client)throw Error('Connect Gate API credentials first.');const [balances,orders]=await Promise.all([this.client.accounts(),this.client.orders()]);return {balances:balances.filter(b=>['LF','USDT'].includes(b.currency)),orders:orders.map(o=>({id:String(o.id),side:o.side,price:o.price,amount:o.amount,left:o.left,text:o.text,source:String(o.text||'').startsWith(this.prefix)?'Bot':'Manual / external'})),...this.status()};}
+ async performance(hours,scope){if(!this.client)throw Error('Connect Gate API credentials first.');if(![1,24,168,720].includes(hours)||!['all','bot'].includes(scope))throw Error('Invalid performance period or scope.');const to=Math.floor(Date.now()/1000),from=to-hours*3600;const rows=await this.client.trades(from,to);return rows.filter(t=>scope==='all'||String(t.text||'').startsWith(this.prefix)).map(t=>({time:Number(t.create_time_ms||Number(t.create_time)*1000),side:t.side,price:t.price,amount:t.amount,fee:t.fee??0,feeCurrency:t.fee_currency||'',gtFee:t.gt_fee||0,pointFee:t.point_fee||0,source:String(t.text||'').startsWith(this.prefix)?'Bot':'Other / untagged',id:String(t.id)})).filter(t=>Number.isFinite(t.time)&&t.time>=from*1000&&t.time<=to*1000+999);}
  async dex(){return referencePrice(await fetchDexReference('ethereum',LF_POOL),'ethereum',LF_POOL).price;}
- async preview(settings){settings={...settings,buyStart:0,sellStart:0};validateConfig(settings);const [market,reference,open]=await Promise.all([this.market(),this.dex(),this.client?this.client.orders():[]]);if(market.pair.trade_status!=='tradable')throw Error('LF/USDT is not currently tradable.');
+ async preview(settings){settings={...settings,buyStart:0,sellStart:0};validateConfig(settings);validateJumpSettings(settings);const [market,reference,open]=await Promise.all([this.market(),this.dex(),this.client?this.client.orders():[]]);if(market.pair.trade_status!=='tradable')throw Error('LF/USDT is not currently tradable.');
   for(const tick of [settings.tick,settings.depthTick]){const exchangeTick=10**-Number(market.pair.precision);if(tick<exchangeTick-1e-15||Math.abs(tick/exchangeTick-Math.round(tick/exchangeTick))>1e-6)throw Error(`Gate ticks must be integer multiples of ${exchangeTick}.`);}
   const normalized=marketOrders(market.book,open,this.metadata,this.prefix);
   const result=quoteCycle(settings,normalized,reference,this.quoted,this.startRef??reference);
@@ -27,12 +29,13 @@ export class LiveService{
   if(!this.client)throw Error('Connect Gate API credentials first.');
   if(this.running||this.busy||this.starting)throw Error('Live worker is already active.');
   this.starting=true;this.stopping=false;
-  try{await this.preview(settings);if(this.stopping)throw Error('Live start was cancelled.');this.settings=settings;this.quoted=null;this.startRef=null;this.lastError=null;this.running=true;this.log('Live bot started by operator. Real Gate orders enabled.');}finally{this.starting=false;}
+  try{const initial=await this.preview(settings);this.jumpGuard.reset();this.jumpGuard.observe(initial.reference,Date.now(),settings);if(this.stopping)throw Error('Live start was cancelled.');this.settings=settings;this.quoted=null;this.startRef=null;this.lastError=null;this.running=true;this.log('Live bot started by operator. Real Gate orders enabled.');}finally{this.starting=false;}
   await this.tick();if(this.running)this.timer=setInterval(()=>this.tick(),Math.max(10,settings.interval)*1000);return this.status();
  }
 
  async tick(){if(!this.running||this.busy)return;this.busy=true;
   try{const plan=await this.preview(this.settings);if(!this.running||this.stopping)return;
+   this.jumpGuard.observe(plan.reference,Date.now(),this.settings);
    for(const id of plan.cancelIds){if(!this.running||this.stopping)return;try{await this.client.cancel(id);}catch(e){if(!/ORDER_NOT_FOUND|ORDER_NOT_OPEN/.test(e.message))throw e;}this.metadata.delete(id);}
    // Read balances after cancellations have released funds; never borrow or use margin.
    const balances=await this.client.accounts();let quote=Number(balances.find(b=>b.currency==='USDT')?.available||0),base=Number(balances.find(b=>b.currency==='LF')?.available||0);
