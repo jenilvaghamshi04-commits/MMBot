@@ -1,0 +1,12 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {generateKeyPairSync,sign} from 'node:crypto';
+import {AccessVerifier,FailureLimiter,SecurityLog} from './access-security.mjs';
+const {privateKey,publicKey}=generateKeyPairSync('rsa',{modulusLength:2048});
+const jwk={...publicKey.export({format:'jwk'}),kid:'key1',alg:'RS256'};
+const cfg={team:'https://example.cloudflareaccess.com',audience:'aud123',emails:'alice@example.com',now:()=>1000000,fetcher:async()=>({ok:true,json:async()=>({keys:[jwk]})})};
+function token(changes={},key=privateKey){const head=Buffer.from(JSON.stringify({alg:'RS256',kid:'key1'})).toString('base64url');const body=Buffer.from(JSON.stringify({iss:cfg.team,aud:['aud123'],email:'alice@example.com',exp:1100,...changes})).toString('base64url');return `${head}.${body}.${sign('RSA-SHA256',Buffer.from(`${head}.${body}`),key).toString('base64url')}`;}
+test('accepts signed Access JWT only with matching issuer, audience, allowed identity and expiry',async()=>{const v=new AccessVerifier(cfg);assert.equal((await v.verify(token())).email,'alice@example.com');for(const bad of [{iss:'https://evil.cloudflareaccess.com'},{aud:['other']},{email:'other@example.com'},{exp:999},{nbf:1001}])await assert.rejects(()=>v.verify(token(bad)));const wrong=generateKeyPairSync('rsa',{modulusLength:2048});await assert.rejects(()=>v.verify(token({},wrong.privateKey)),/signature/);await assert.rejects(()=>new AccessVerifier({...cfg,emails:''}).verify(token()),/not configured/);});
+test('key fetch failure rejects access instead of accepting a session',async()=>{const v=new AccessVerifier({...cfg,fetcher:async()=>({ok:false})});await assert.rejects(()=>v.verify(token()),/unavailable/);});
+test('failed token attempts limit only the verified identity and reset after five minutes',()=>{const l=new FailureLimiter();for(let i=0;i<5;i++)l.fail('alice',1000);assert.equal(l.allowed('alice',1001),false);assert.equal(l.allowed('bob',1001),true);assert.equal(l.allowed('alice',301000),true);});
+test('security alerts use configured private destination without including tokens in events',async()=>{let payload;const log=new SecurityLog({token:'123:abcd',chat:'-42',fetcher:async(url,opts)=>{payload=JSON.parse(opts.body);return {ok:true};}});log.record('operator_auth_failed','alice@example.com',true);assert.equal(payload.chat_id,'-42');assert.ok(!JSON.stringify(log.events).includes('abcd'));assert.ok(!payload.text.includes('alice@example.com'));});
